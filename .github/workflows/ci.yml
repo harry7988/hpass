@@ -68,7 +68,7 @@ jobs:
           "$B" version; echo "version-exit=$?"
           HPASS_PASSPHRASE=ci-pass-123 "$B" --home "$HPASS_SMOKE" init --no-harden; echo "init-exit=$?"
           echo ci-secret-9 | HPASS_PASSPHRASE=ci-pass-123 "$B" --home "$HPASS_SMOKE" set db -u root --password-stdin; echo "set-exit=$?"
-          OUT=$(HPASS_PASSPHRASE=ci-pass-123 "$B" --home "$HPASS_SMOKE" exec -- sh -c 'echo {{db}}'); echo "exec-exit=$? exec-out=[$OUT]"
+          OUT=$(HPASS_PASSPHRASE=ci-pass-123 "$B" --home "$HPASS_SMOKE" exec --allow-echo -- sh -c 'echo {{db}}'); echo "exec-exit=$? exec-out=[$OUT]"
           printf '%s' "$OUT" | grep -F '{{db}}'
 
           # M3 特权加固真实 root 流程（runner 具备免密 sudo；Windows 跳过）
@@ -80,7 +80,7 @@ jobs:
             echo root-secret-88 | HPASS_PASSPHRASE=ci-pass-123 "$B" --home "$HPASS_SMOKE" set db3 -u u3 --password-stdin; echo "set3-exit=$?"
             HPASS_PASSPHRASE=ci-pass-123 "$B" --home "$HPASS_SMOKE" list --json | grep -F '"name": "db3"'
             # exec 读路径无需提权 + 输出脱敏
-            OUT3=$(HPASS_PASSPHRASE=ci-pass-123 "$B" --home "$HPASS_SMOKE" exec -- sh -c 'echo {{db3}}'); echo "exec3-exit=$? exec3-out=[$OUT3]"
+            OUT3=$(HPASS_PASSPHRASE=ci-pass-123 "$B" --home "$HPASS_SMOKE" exec --allow-echo -- sh -c 'echo {{db3}}'); echo "exec3-exit=$? exec3-out=[$OUT3]"
             printf '%s' "$OUT3" | grep -F '{{db3}}'
             if [ "${{ matrix.rid }}" = "osx-arm64" ]; then sudo -n chflags -R noschg "$HPASS_SMOKE" 2>/dev/null || true; fi
             if [ "${{ matrix.rid }}" = "linux-x64" ]; then sudo -n chattr -i "$HPASS_SMOKE/vault.json" "$HPASS_SMOKE/master.key" 2>/dev/null || true; fi

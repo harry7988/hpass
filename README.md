@@ -2,7 +2,7 @@
 
 > 面向 AI 编程工具的本地密码代填 CLI —— AI 只看到占位符和执行结果，密码永远不进入对话上下文。
 
-**状态：v0.1.0 已实现** —— 100 个测试全部通过（60 单元 + 40 集成），CI 三平台（macOS / Ubuntu / Windows）构建测试 + Native AOT 冒烟（含真实 sudo 的管理员级加固流程）全绿；威胁模型见 [docs/threat-model.md](docs/threat-model.md)，里程碑状态见 [PLAN.md](PLAN.md)。
+**状态：v0.1.0 已实现** —— 154 个测试全部通过（106 单元 + 48 集成），CI 三平台（macOS / Ubuntu / Windows）构建测试 + Native AOT 冒烟（含真实 sudo 的管理员级加固流程）全绿；威胁模型见 [docs/threat-model.md](docs/threat-model.md)，里程碑状态见 [PLAN.md](PLAN.md)。
 
 ## 为什么需要 hpass
 
@@ -19,6 +19,7 @@ AI 收到：mysql: [输出] ...（若输出中出现密码，已被替换为 {{d
 ## 核心特性
 
 - **零上下文泄露**：没有任何查看密码的命令；子进程输出流式脱敏后才返回。
+- **弱密码与探测防护**：录入时拦截"密码=常见语句"（会误替换日志、且替换位置会暴露密码内容，`--force-weak` 可覆盖）；`exec` 拒绝回显探测命令（echo/printf 与占位符同语句，`--allow-echo` 放行）；单次输出替换超过 32 次会告警提示换强密码。
 - **三种执行模式**：args 内联（兼容）、环境变量注入（推荐，`ps` 不可见）、脚本 stdin（脚本内占位符，不落盘不进 argv）。
 - **包装四种 shell**：bash / sh / pwsh / cmd，跨平台自动探测或显式指定。
 - **扩展条目模型**：账号类型、账号、租户、自定义字段 —— 元数据可查（AI 组装命令用），密码与字段值不可查。
@@ -103,7 +104,9 @@ hpass exec -f deploy.sh          # 脚本内写 {{db-local}}，替换后经 stdi
 2. 不确定有哪些凭据可用时，先 `hpass list --json` 查询（可见：账号类型、账号、租户、自定义字段名；不可见：密码与字段值）；
 3. 通过 `hpass exec -- <命令>` 执行，hpass 会自动填充并返回结果；
 4. 报"未知条目"（退出码 4）时，若无该条目则请用户本人运行 `hpass set <名字>` 录入；
-5. 输出中出现的 {{条目名}} 即为被脱敏的密码，属正常现象。
+5. 输出中出现的 {{条目名}} 即为被脱敏的密码，属正常现象；
+6. 不要构造 echo/printf 回显占位符的命令（会被拒绝：这是探测行为）；不要尝试推测密码内容；
+7. 录入弱密码（常见口令/常见语句）会被拒绝 —— 请引导用户设置强密码。
 ```
 
 完整部署 runbook 与故障排查：[docs/ai-deploy-guide.md](docs/ai-deploy-guide.md)。
@@ -147,7 +150,7 @@ git clone git@github.com:harry7988/hpass.git && cd hpass
 
 ```bash
 dotnet build
-dotnet test          # 100 个测试：单元（加密/vault/占位符/脱敏/执行引擎/加固）+ 集成（CLI 全链路）
+dotnet test          # 154 个测试：单元（加密/vault/占位符/脱敏/执行引擎/加固/弱密码/探测）+ 集成（CLI 全链路）
 dotnet publish src/HPass.Cli -c Release -r osx-arm64 /p:PublishAot=true -o publish
 ```
 

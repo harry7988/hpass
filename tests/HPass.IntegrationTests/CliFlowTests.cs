@@ -77,7 +77,7 @@ public class CliFlowTests
     [Fact]
     public void Set_InvalidName_WithDot_Fails()
     {
-        var (exit, _, stderr) = F.RunAsWithInput("init-pass-123", "some-pw", "set", "bad.name", "--password-stdin");
+        var (exit, _, stderr) = F.RunAsWithInput("init-pass-123", "some-pw-99", "set", "bad.name", "--password-stdin");
         Assert.Equal(ExitCodes.Usage, exit);
         Assert.Contains("非法", stderr);
     }
@@ -85,7 +85,7 @@ public class CliFlowTests
     [Fact]
     public void Set_ReservedFieldName_Fails()
     {
-        var (exit, _, stderr) = F.RunAsWithInput("init-pass-123", "some-pw", "set", "x1", "-f", "user=v", "--password-stdin");
+        var (exit, _, stderr) = F.RunAsWithInput("init-pass-123", "some-pw-99", "set", "x1", "-f", "user=v", "--password-stdin");
         Assert.Equal(ExitCodes.Usage, exit);
         Assert.Contains("保留字", stderr);
     }
@@ -119,7 +119,7 @@ public class CliFlowTests
     {
         var vaultPath = Path.Combine(F.Home, "vault.json");
         var before = File.ReadAllBytes(vaultPath);
-        var (exit, _, _) = F.RunAsWithInput("totally-wrong-pass", "some-pw", "set", "newentry", "--password-stdin");
+        var (exit, _, _) = F.RunAsWithInput("totally-wrong-pass", "some-pw-99", "set", "newentry", "--password-stdin");
         Assert.Equal(ExitCodes.Vault, exit);
         Assert.Equal(before, File.ReadAllBytes(vaultPath));
     }
@@ -129,7 +129,7 @@ public class CliFlowTests
     {
         if (!Unix) return;
         Environment.SetEnvironmentVariable("HPASS_PASSPHRASE", "init-pass-123");
-        F.RunWithInput("tmp-pw-1", "set", "tmp-entry", "--password-stdin");
+        F.RunWithInput("tmp-pw-11", "set", "tmp-entry", "--password-stdin");
         Environment.SetEnvironmentVariable("HPASS_PASSPHRASE", null);
 
         var (delExit, _, _) = F.Run("delete", "tmp-entry");
@@ -144,7 +144,7 @@ public class CliFlowTests
     {
         if (!Unix) return;
         Environment.SetEnvironmentVariable("HPASS_PASSPHRASE", "init-pass-123");
-        F.RunWithInput("rn-pw-1", "set", "ren-me", "-u", "u1", "--password-stdin");
+        F.RunWithInput("rn-pw-11", "set", "ren-me", "-u", "u1", "--password-stdin");
         var (renameExit, _, _) = F.Run("rename", "ren-me", "renamed");
         Assert.Equal(0, renameExit);
         Environment.SetEnvironmentVariable("HPASS_PASSPHRASE", null);
@@ -164,7 +164,7 @@ public class CliFlowTests
     public void Exec_InlineMode_RedactsPassword()
     {
         if (!Unix) return;
-        var (exit, stdout, _) = F.RunAs("init-pass-123", "exec", "--", "/bin/echo", "{{db}}");
+        var (exit, stdout, _) = F.RunAs("init-pass-123", "exec", "--allow-echo", "--", "/bin/echo", "{{db}}");
         Assert.Equal(0, exit);
         Assert.Equal("{{db}}\n", stdout);
     }
@@ -173,7 +173,7 @@ public class CliFlowTests
     public void Exec_InlineMode_EchoThroughShell_Redacted()
     {
         if (!Unix) return;
-        var (exit, stdout, _) = F.RunAs("init-pass-123", "exec", "--", "/bin/sh", "-c", "echo pw={{db}}");
+        var (exit, stdout, _) = F.RunAs("init-pass-123", "exec", "--allow-echo", "--", "/bin/sh", "-c", "echo pw={{db}}");
         Assert.Equal(0, exit);
         Assert.Equal("pw={{db}}\n", stdout);
     }
@@ -182,7 +182,7 @@ public class CliFlowTests
     public void Exec_PlaintextFieldsVisible_SecretFieldsRedacted()
     {
         if (!Unix) return;
-        var (exit, stdout, _) = F.RunAs("init-pass-123", "exec", "--",
+        var (exit, stdout, _) = F.RunAs("init-pass-123", "exec", "--allow-echo", "--",
             "/bin/sh", "-c", "echo {{db.user}} {{db.tenant}} {{db.host}} {{db.api_key}} {{db}}");
         Assert.Equal(0, exit);
         Assert.Equal("root prod {{db.host}} {{db.api_key}} {{db}}\n", stdout);
@@ -206,7 +206,7 @@ public class CliFlowTests
         File.WriteAllText(script, "#!/bin/sh\necho host={{db.host}} pw={{db}}\n");
         try
         {
-            var (exit, stdout, _) = F.RunAs("init-pass-123", "exec", "-f", script, "--shell", "sh");
+            var (exit, stdout, _) = F.RunAs("init-pass-123", "exec", "--allow-echo", "-f", script, "--shell", "sh");
             Assert.Equal(0, exit);
             Assert.Equal("host={{db.host}} pw={{db}}\n", stdout);
             Assert.Contains("{{db}}", File.ReadAllText(script)); // 替换只发生在内存（I6 精神：不落盘）
@@ -225,7 +225,7 @@ public class CliFlowTests
         File.WriteAllText(script, "Write-Output \"pw={{db}}\"\n");
         try
         {
-            var (exit, stdout, _) = F.RunAs("init-pass-123", "exec", "-f", script, "--shell", "pwsh");
+            var (exit, stdout, _) = F.RunAs("init-pass-123", "exec", "--allow-echo", "-f", script, "--shell", "pwsh");
             Assert.Equal(0, exit);
             // runner 上 pwsh 会包裹 VT 转义序列：断言脱敏存在、密文不存在即可
             Assert.Contains("pw={{db}}", stdout);
@@ -258,7 +258,7 @@ public class CliFlowTests
     public void Exec_WrongPassphrase_FailsWithoutLeak()
     {
         if (!Unix) return;
-        var (exit, _, stderr) = F.RunAs("wrong-passphrase-x", "exec", "--", "/bin/echo", "{{db}}");
+        var (exit, _, stderr) = F.RunAs("wrong-passphrase-x", "exec", "--allow-echo", "--", "/bin/echo", "{{db}}");
         Assert.Equal(ExitCodes.Vault, exit);
         Assert.DoesNotContain(CliFixture.DbPassword, stderr);
     }
@@ -267,7 +267,7 @@ public class CliFlowTests
     public void Exec_NoPassphraseAvailable_NonInteractive_Fails()
     {
         if (!Unix) return;
-        var (exit, _, _) = F.Run("exec", "--", "/bin/echo", "{{db}}");
+        var (exit, _, _) = F.Run("exec", "--allow-echo", "--", "/bin/echo", "{{db}}");
         Assert.Equal(ExitCodes.Vault, exit);
     }
 
@@ -287,7 +287,7 @@ public class CliFlowTests
             entry.Ct = Convert.ToBase64String(ct);
             File.WriteAllText(vaultPath, JsonSerializer.Serialize(json, HPassJsonContext.Default.VaultFile));
 
-            var (exit, _, _) = F.RunAs("init-pass-123", "exec", "--", "/bin/echo", "{{db}}");
+            var (exit, _, _) = F.RunAs("init-pass-123", "exec", "--allow-echo", "--", "/bin/echo", "{{db}}");
             Assert.Equal(ExitCodes.Vault, exit);
         }
         finally { File.WriteAllText(vaultPath, original); }
@@ -298,7 +298,7 @@ public class CliFlowTests
     {
         if (!Unix) return;
         var start = DateTime.UtcNow;
-        var (exit, _, stderr) = F.RunAs("init-pass-123", "exec", "--timeout", "1", "--",
+        var (exit, _, stderr) = F.RunAs("init-pass-123", "exec", "--allow-echo", "--timeout", "1", "--",
             "/bin/sh", "-c", "sleep 20 && echo {{db}}");
         Assert.Equal(ExitCodes.Timeout, exit);
         Assert.True((DateTime.UtcNow - start).TotalSeconds < 15);
@@ -366,7 +366,7 @@ public class CliFlowTests
         try
         {
             F.RunWithInput("space pass 77", "set", "spacey", "--password-stdin");
-            var (exit, stdout, _) = F.Run("exec", "--", "/bin/echo", "x={{spacey}}x");
+            var (exit, stdout, _) = F.Run("exec", "--allow-echo", "--", "/bin/echo", "x={{spacey}}x");
             Assert.Equal(0, exit);
             Assert.Equal("x={{spacey}}x\n", stdout);
         }
@@ -392,7 +392,7 @@ public class CliFlowTests
         {
             var (rotExit, _, _) = F.RunAs("init-pass-123", "rotate");
             Assert.Equal(0, rotExit);
-            var (execExit, stdout, _) = F.RunAs("init-pass-123", "exec", "--", "/bin/echo", "{{db}}");
+            var (execExit, stdout, _) = F.RunAs("init-pass-123", "exec", "--allow-echo", "--", "/bin/echo", "{{db}}");
             Assert.Equal(0, execExit);
             Assert.Equal("{{db}}\n", stdout);
         }
@@ -448,5 +448,126 @@ public class CliFlowTests
         Assert.Equal(UnixFileMode.UserRead | UnixFileMode.UserWrite, mode);
         var dirMode = File.GetUnixFileMode(F.Home);
         Assert.Equal(UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute, dirMode);
+    }
+
+    // ---------- 安全增强：弱密码拦截 / 回显探测拦截 / 输出泄露审计 ----------
+
+    [Fact]
+    public void Set_WeakCommonStatement_Rejected()
+    {
+        if (!Unix) return;
+        var vaultPath = Path.Combine(F.Home, "vault.json");
+        var before = File.ReadAllBytes(vaultPath);
+        // 密码恰为"日志里非常常见的语句"：必须拒绝，否则会误替换日志且替换位置暴露密码
+        var (exit, _, stderr) = F.RunAsWithInput("init-pass-123", "select 1", "set", "weak1", "--password-stdin");
+        Assert.Equal(ExitCodes.Usage, exit);
+        Assert.Contains("弱密码", stderr);
+        Assert.Contains("--force-weak", stderr);
+        var (exit2, _, _) = F.RunAsWithInput("init-pass-123", "password", "set", "weak2", "--password-stdin");
+        Assert.Equal(ExitCodes.Usage, exit2);
+        var (exit3, _, _) = F.RunAsWithInput("init-pass-123", "short7", "set", "weak3", "--password-stdin");
+        Assert.Equal(ExitCodes.Usage, exit3);
+        Assert.Equal(before, File.ReadAllBytes(vaultPath));
+    }
+
+    [Fact]
+    public void Set_ForceWeak_Overrides()
+    {
+        if (!Unix) return;
+        try
+        {
+            var (exit, _, _) = F.RunAsWithInput("init-pass-123", "aaaaaaaa1", "set", "noisy", "--password-stdin", "--force-weak");
+            Assert.Equal(0, exit);
+        }
+        finally { F.Run("delete", "noisy"); }
+    }
+
+    [Fact]
+    public void Set_WeakFieldValue_WarnsButSaves()
+    {
+        if (!Unix) return;
+        try
+        {
+            var (exit, _, stderr) = F.RunAsWithInput("init-pass-123", "Str0ng-Pass-77",
+                "set", "fieldwarn", "-f", "host=localhost", "--password-stdin");
+            Assert.Equal(0, exit);
+            Assert.Contains("警告", stderr);   // 字段值常见只警告不阻断
+            Assert.DoesNotContain("localhost", F.Run("inspect", "fieldwarn").Stdout); // 值仍不可见
+        }
+        finally { F.Run("delete", "fieldwarn"); }
+    }
+
+    [Fact]
+    public void Exec_EchoProbe_Refused_CommandNotRun()
+    {
+        if (!Unix) return;
+        var marker = Path.Combine(Path.GetTempPath(), "hpass-probe-" + Guid.NewGuid().ToString("N"));
+        var (exit, _, stderr) = F.RunAs("init-pass-123", "exec", "--",
+            "/bin/sh", "-c", $"echo {{{{db}}}} > {marker}");
+        Assert.Equal(ExitCodes.Usage, exit);
+        Assert.Contains("--allow-echo", stderr);
+        Assert.False(File.Exists(marker), "回显探测命令必须被拒绝执行");
+    }
+
+    [Fact]
+    public void Exec_EchoProbe_AllowEcho_Redacts()
+    {
+        if (!Unix) return;
+        var (exit, stdout, _) = F.RunAs("init-pass-123", "exec", "--allow-echo", "--",
+            "/bin/sh", "-c", "echo pw={{db}}");
+        Assert.Equal(0, exit);
+        Assert.Equal("pw={{db}}\n", stdout);
+    }
+
+    [Fact]
+    public void Exec_EchoProbe_PlaintextFieldsNotBlocked()
+    {
+        if (!Unix) return;
+        var (exit, stdout, _) = F.Run("exec", "--", "/bin/echo", "u={{db.user}}");
+        Assert.Equal(0, exit);
+        Assert.Equal("u=root\n", stdout);
+    }
+
+    [Fact]
+    public void Exec_HighFrequencyCollision_Warns()
+    {
+        if (!Unix) return;
+        try
+        {
+            F.RunAsWithInput("init-pass-123", "aaaaaaaa1", "set", "noisy", "--password-stdin", "--force-weak");
+            // 弱密码与输出高频碰撞（40 次）→ 必须给出换密码警告
+            var (exit, _, stderr) = F.RunAs("init-pass-123", "exec", "--",
+                "/bin/sh", "-c", "yes {{{{noisy}}}} | head -40");
+            Assert.Equal(0, exit);
+            Assert.Contains("建议更换强密码", stderr);
+            Assert.DoesNotContain("aaaaaaaa1", stderr);
+        }
+        finally { F.Run("delete", "noisy"); }
+    }
+
+    [Fact]
+    public void AuditOutputs_NoSecretInAnyCommandOutput()
+    {
+        // 全命令输出面审计（I1/I5）：正常输出与错误输出均不得包含密码与字段值
+        var secrets = new[] { CliFixture.DbPassword, "ssh-pw-77", "ak-9" };
+        var outputs = new (int Exit, string Stdout, string Stderr)[]
+        {
+            F.Run("version"),
+            F.Run("list"),
+            F.Run("list", "--json"),
+            F.Run("inspect", "db"),
+            F.Run("doctor"),
+            F.RunAs("wrong-pass-99", "exec", "--", "/bin/echo", "{{db}}"),        // 口令错误路径
+            F.Run("exec", "--", "/bin/echo", "{{ghost}}"),                          // 未知占位符路径
+            F.RunAsWithInput("init-pass-123", "password", "set", "weakx", "--password-stdin"), // 弱密码拒绝路径
+        };
+        foreach (var (exit, stdout, stderr) in outputs)
+        {
+            foreach (var secret in secrets)
+            {
+                Assert.DoesNotContain(secret, stdout);
+                Assert.DoesNotContain(secret, stderr);
+            }
+        }
     }
 }

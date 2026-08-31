@@ -49,6 +49,7 @@ public static class Commands
         string? name = null, type = null, username = null, tenant = null, password = null;
         var fields = new List<(string Name, string? Value)>();
         var passwordStdin = false;
+        var forceWeak = false;
 
         for (var i = 0; i < args.Length; i++)
         {
@@ -63,13 +64,14 @@ public static class Commands
                     fields.Add(eq < 0 ? (spec, null) : (spec[..eq], spec[(eq + 1)..]));
                     break;
                 case "--password-stdin": passwordStdin = true; break;
+                case "--force-weak": forceWeak = true; break;
                 default:
                     if (name is null && !args[i].StartsWith('-')) name = args[i];
                     else throw new UsageException($"set：无法识别的参数 {args[i]}");
                     break;
             }
         }
-        if (name is null) throw new UsageException("用法：hpass set <名> [-t 类型] [-u 账号] [-T 租户] [-f 字段=值]… [--password-stdin]");
+        if (name is null) throw new UsageException("用法：hpass set <名> [-t 类型] [-u 账号] [-T 租户] [-f 字段=值]… [--password-stdin] [--force-weak]");
 
         if (passwordStdin)
         {
@@ -86,6 +88,10 @@ public static class Commands
         }
         else throw new UsageException("非交互环境请使用 --password-stdin 从 stdin 提供密码（禁止命令行明文传密码）");
 
+        // 弱密文拦截：密码=常见语句时会与正常输出碰撞，且"被替换的位置"会直接暴露密码内容
+        if (!forceWeak && WeakSecret.Check(password) is { } reason)
+            throw new UsageException($"拒绝保存弱密码：{reason}。如确要使用请追加 --force-weak（风险自担：输出中的常见文本会被大面积误替换为占位符，并可被据此推测）");
+
         using var vault = Vault.Open(ctx.Home);
         using var _lock = Vault.FileLock.Acquire(ctx.Home);
         vault.Unlock(GetPassphrase(ctx, confirm: false));
@@ -96,6 +102,9 @@ public static class Commands
             string value = fvalue ?? (ctx.Interactive
                 ? HiddenInputWithPrompt(ctx, $"字段 {fname} 的值: ")
                 : throw new UsageException($"非交互环境请用 -f {fname}=<值> 提供字段值"));
+            // 字段值（如 host=127.0.0.1 这类常见值）不阻断，仅警告：与密码不同，字段常为非敏感配置
+            if (WeakSecret.Check(value) is { } fieldReason)
+                ctx.ErrText.WriteLine($"hpass: 警告：字段 {fname} 的值{fieldReason}；作为密文注入时可能与正常输出碰撞，请确认");
             vault.SetField(entry, fname, value);
         }
         vault.Save();

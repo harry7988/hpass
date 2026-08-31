@@ -53,7 +53,7 @@ public class HardeningFlowTests
             Assert.True(Hardening.IsImmutable(Path.Combine(home, "vault.json")), "vault.json 安装后必须重新加保护");
             Assert.True(Hardening.IsImmutable(Path.Combine(home, "master.key")));
 
-            var (execExit, stdout, _) = F.RunIn(home, null, "exec", "--", "/bin/echo", "{{second}}");
+            var (execExit, stdout, _) = F.RunIn(home, null, "exec", "--allow-echo", "--", "/bin/echo", "{{second}}");
             Assert.Equal(0, execExit);
             Assert.Equal("{{second}}\n", stdout);
             Assert.DoesNotContain("uchg-pw-9", stderr);

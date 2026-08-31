@@ -15,6 +15,7 @@ public static class ExecCommand
         var envSpecs = new List<(string Entry, string Var)>();
         var cmd = new List<string>();
         var inCmd = false;
+        var allowEcho = false;
 
         for (var i = 0; i < args.Length; i++)
         {
@@ -25,6 +26,9 @@ public static class ExecCommand
                 case "--shell":
                     if (++i >= args.Length) throw new UsageException("--shell 需要 shell 名");
                     shell = args[i];
+                    break;
+                case "--allow-echo":
+                    allowEcho = true;
                     break;
                 case "--timeout":
                     if (++i >= args.Length || !int.TryParse(args[i], out var t) || t <= 0)
@@ -75,6 +79,14 @@ public static class ExecCommand
         {
             if (vault.Find(envEntry) is null)
                 throw new PlaceholderException(Vault.Token(envEntry, null), envEntry, $"条目不存在：{envEntry}");
+        }
+
+        // 回显探测防护：echo/printf 等与密文占位符同语句 → 拒绝（替换位置会暴露密码内容，可被字典探测利用）
+        if (!allowEcho)
+        {
+            var rawText = texts.Count > 0 ? string.Join('\n', texts) : "";
+            if (EchoProbe.IsProbe(rawText, out var probedToken))
+                throw new UsageException(EchoProbe.DenyMessage(probedToken));
         }
 
         var needsSecret = refs.Any(NeedsSecret) || envSpecs.Count > 0;
@@ -129,6 +141,12 @@ public static class ExecCommand
         var result = ShellLauncher.Run(request, ctx.Out, ctx.Err);
         if (result.TimedOut)
             ctx.ErrText.WriteLine($"hpass: 执行超时（{request.TimeoutSeconds}s），已终止进程树");
+        // 高频碰撞警告：某密文在输出中出现过多 → 密码疑似为常见语句，替换位置会暴露其内容，建议更换
+        foreach (var (token, count) in result.ReplacementCounts)
+        {
+            if (count > 32)
+                ctx.ErrText.WriteLine($"hpass: 警告：{token} 在输出中出现 {count} 次已被脱敏——该密码疑似与常见文本碰撞（既破坏输出，也可能被据此推测），建议更换强密码：hpass set {token.Trim('{', '}').Split('.')[0]}");
+        }
         return result.ExitCode;
     }
 

@@ -24,6 +24,8 @@ public sealed class ExecResult
 {
     public int ExitCode { get; init; }
     public bool TimedOut { get; init; }
+    /// <summary>各占位符在输出中的替换次数（stdout+stderr 合计），用于高频碰撞检测。</summary>
+    public IReadOnlyDictionary<string, int> ReplacementCounts { get; init; } = new Dictionary<string, int>();
 }
 
 /// <summary>
@@ -195,11 +197,19 @@ public static class ShellLauncher
             try { process.Kill(entireProcessTree: true); } catch { }
             process.WaitForExit(5_000);
             Task.WaitAll([pumpOut, pumpErr], 5_000);
-            return new ExecResult { ExitCode = ExitCodes.Timeout, TimedOut = true };
+            return new ExecResult { ExitCode = ExitCodes.Timeout, TimedOut = true, ReplacementCounts = MergeCounts(outRedactor, errRedactor) };
         }
 
         Task.WaitAll([pumpOut, pumpErr], 10_000);
-        return new ExecResult { ExitCode = process.ExitCode };
+        return new ExecResult { ExitCode = process.ExitCode, ReplacementCounts = MergeCounts(outRedactor, errRedactor) };
+    }
+
+    private static IReadOnlyDictionary<string, int> MergeCounts(StreamRedactor a, StreamRedactor b)
+    {
+        var d = new Dictionary<string, int>(a.ReplacementCounts);
+        foreach (var (k, v) in b.ReplacementCounts)
+            d[k] = d.TryGetValue(k, out var cur) ? cur + v : v;
+        return d;
     }
 
     private static async Task PumpAsync(Stream source, Stream sink, StreamRedactor redactor)

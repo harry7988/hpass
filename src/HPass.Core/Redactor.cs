@@ -11,6 +11,7 @@ public sealed class StreamRedactor
     private readonly (byte[] Secret, byte[] Token)[] _rules;
     private readonly int _maxSecretLen;
     private byte[] _carry = [];
+    private readonly int[] _counts;
 
     public StreamRedactor(IReadOnlyDictionary<string, string> secretToToken)
     {
@@ -18,10 +19,23 @@ public sealed class StreamRedactor
             .Select(kv => (Encoding.UTF8.GetBytes(kv.Key), Encoding.UTF8.GetBytes(kv.Value)))
             .OrderByDescending(r => r.Item1.Length)
             .ToArray();
+        _counts = new int[_rules.Length];
         _maxSecretLen = _rules.Length == 0 ? 0 : _rules.Max(r => r.Secret.Length);
     }
 
     public bool HasRules => _rules.Length > 0;
+
+    /// <summary>各占位符的累计替换次数（用于高频碰撞检测）。</summary>
+    public IReadOnlyDictionary<string, int> ReplacementCounts
+    {
+        get
+        {
+            var d = new Dictionary<string, int>();
+            for (var i = 0; i < _rules.Length; i++)
+                d[Encoding.UTF8.GetString(_rules[i].Token)] = _counts[i];
+            return d;
+        }
+    }
 
     /// <summary>处理一块数据，返回可安全外发的字节。</summary>
     public byte[] Process(ReadOnlySpan<byte> chunk)
@@ -51,6 +65,7 @@ public sealed class StreamRedactor
             var rule = _rules[bestRule];
             emitted.Write(buf.AsSpan(pos, bestIdx - pos));
             emitted.Write(rule.Token);
+            _counts[bestRule]++;
             pos = bestIdx + rule.Secret.Length;
         }
 
