@@ -5,6 +5,9 @@ on:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: write
+
 jobs:
   test:
     name: build & test (${{ matrix.os }})
@@ -21,19 +24,17 @@ jobs:
       - run: dotnet build -c Debug
       - name: Test
         shell: bash
+        run: dotnet test --no-build -c Debug 2>&1 | tee test.log; exit ${PIPESTATUS[0]}
+      - name: Publish failure diagnostics
+        if: failure()
+        shell: bash
         run: |
-          set -o pipefail
-          dotnet test --no-build -c Debug 2>&1 | tee test.log
-          status=$?
-          if [ $status -ne 0 ]; then
-            {
-              echo "## dotnet test 失败输出（尾部 400 行）"
-              echo '```'
-              tail -400 test.log
-              echo '```'
-            } >> "$GITHUB_STEP_SUMMARY"
-          fi
-          exit $status
+          git config user.name ci-bot && git config user.email ci@hpass.local
+          mkdir -p diagnostics
+          cp test.log "diagnostics/test-${{ matrix.os }}.log"
+          git add diagnostics
+          git commit -m "diag: ${{ matrix.os }}"
+          git push origin HEAD:ci-diag/${{ matrix.os }}
 
   aot:
     name: AOT smoke (${{ matrix.rid }})
@@ -64,4 +65,13 @@ jobs:
           echo ci-secret-9 | HPASS_PASSPHRASE=ci-pass-123 "$B" --home "$HPASS_SMOKE" set db -u root --password-stdin
           HPASS_PASSPHRASE=ci-pass-123 "$B" --home "$HPASS_SMOKE" exec -- sh -c 'echo {{db}}' | tee smoke.log | grep -F '{{db}}'
           rm -rf "$HPASS_SMOKE"
-        # 诊断：失败时把输出放进 job summary（可通过公开 API 读取）
+      - name: Publish failure diagnostics
+        if: failure()
+        shell: bash
+        run: |
+          git config user.name ci-bot && git config user.email ci@hpass.local
+          mkdir -p diagnostics
+          cp smoke.log "diagnostics/aot-${{ matrix.rid }}.log" 2>/dev/null || true
+          git add diagnostics || true
+          git commit -m "diag: aot-${{ matrix.rid }}" || true
+          git push origin HEAD:ci-diag/aot-${{ matrix.rid }}
