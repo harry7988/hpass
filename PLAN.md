@@ -131,12 +131,11 @@ AI 工具 (Claude Code / Cursor / …)                 人（一次性录入）
 └── run/           # 用户可写：lock（flock / LockFileEx）、会话产物
 ```
 
-**vault.json 格式**（扩展条目模型：类型/账号/租户明文供 AI 查询，密码与自定义字段值加密）：
+**vault.json 格式**（与 v0.1.0 实现一致；KDF 参数在 master.key 中，vault.json 不含）：
 
 ```json
 {
-  "version": 3,
-  "kdf": { "algo": "PBKDF2-SHA512", "iterations": 210000, "salt": "b64" },
+  "version": 1,
   "identity": { "alg": "RSA-OAEP-SHA256", "publicKey": "b64(SPKI)" },
   "wrappedDek": { "alg": "RSA-OAEP-SHA256", "ct": "b64" },
   "entries": [
@@ -146,15 +145,26 @@ AI 工具 (Claude Code / Cursor / …)                 人（一次性录入）
       "username": "root",
       "tenant": "prod",
       "fields": [
-        { "name": "host", "nonce": "b64", "ct": "b64(AES-GCM(value), AAD=name+field)" },
+        { "name": "host", "nonce": "b64", "ct": "b64(AES-GCM(value), AAD=name|f:host)" },
         { "name": "api_key", "nonce": "b64", "ct": "b64" }
       ],
       "createdAt": "2026-09-01T00:00:00Z",
       "updatedAt": "2026-09-01T00:00:00Z",
       "nonce": "b64(12B)",
-      "ct": "b64(AES-GCM(password), AAD=name+version)"
+      "ct": "b64(AES-GCM(password), AAD=name|\x01password)"
     }
   ]
+}
+```
+
+**master.key 格式**（RSA 私钥经口令派生密钥加密）：
+
+```json
+{
+  "kdf": { "algo": "PBKDF2-SHA512", "iterations": 210000, "salt": "b64(16B)" },
+  "alg": "AES-256-GCM",
+  "nonce": "b64(12B)",
+  "ct": "b64(PKCS8(RSA-3072), AAD=\"hpass/master.key\")"
 }
 ```
 
@@ -304,14 +314,14 @@ h-password/
 
 ## 11. 里程碑（单人开发估算）
 
-| 里程碑 | 内容 | 验收标准 |
-|---|---|---|
-| **M0** 工程底座（1-2 天） | solution、双项目、CI 三平台、AOT 发布管线骨架 | 三平台 AOT 产物可运行 `hpass version` |
-| **M1** 保险库（3-5 天） | init/set/inspect/list/delete/rename + 扩展条目模型（类型/账号/租户/自定义字段）+ 全套加密 + 单测（基础权限模式，加固在 M3） | roundtrip 通过；错误口令拒绝；文件权限正确；篡改检测；list/inspect 无密文值泄露 |
-| **M2** 执行引擎（4-6 天） | exec 三模式、shell 矩阵、流式脱敏、env 注入、超时、退出码 | 集成测试矩阵全绿；`echo {{db}}` 输出已脱敏；env 模式 ps 不可见 |
-| **M3** 特权加固（2-4 天） | §5.1 全平台：root/Admin 属主、不可变标志 / ACL、提权原子覆盖、中断恢复、doctor 检测与降级 | 用户态写 vault 必被拒；提权覆盖与恢复流程通过；WSL / 无 sudo 环境优雅降级 |
-| **M4** 发布与文档（2-3 天） | README/AI 指引随开发完善、threat-model、release workflow（README、LICENSE、AI 部署指南已前置完成） | 三平台二进制 + 校验和发布；新机器 5 分钟上手 |
-| **M5** 增强（按需） | OS keychain 解锁、agent 常驻、rotate、export/import、MCP server（`hpass mcp` 暴露 `credentialed_exec` 工具）、Argon2id、risky-pattern lint | 按特性单独验收 |
+| 里程碑 | 内容 | 验收标准 | 状态（2026-09-01） |
+|---|---|---|---|
+| **M0** 工程底座（1-2 天） | solution、双项目、CI 三平台、AOT 发布管线骨架 | 三平台 AOT 产物可运行 `hpass version` | ✅ 完成（osx-arm64 本地 AOT 冒烟通过；三平台 CI 已配置） |
+| **M1** 保险库（3-5 天） | init/set/inspect/list/delete/rename + 扩展条目模型（类型/账号/租户/自定义字段）+ 全套加密 + 单测（基础权限模式，加固在 M3） | roundtrip 通过；错误口令拒绝；文件权限正确；篡改检测；list/inspect 无密文值泄露 | ✅ 完成（单测 53 个 + 集成覆盖） |
+| **M2** 执行引擎（4-6 天） | exec 三模式、shell 矩阵、流式脱敏、env 注入、超时、退出码 | 集成测试矩阵全绿；`echo {{db}}` 输出已脱敏；env 模式 ps 不可见 | ✅ 完成（bash/sh/pwsh 实测，cmd 实现待 Windows CI；env 注入 argv 干净） |
+| **M3** 特权加固（2-4 天） | §5.1 全平台：root/Admin 属主、不可变标志 / ACL、提权原子覆盖、中断恢复、doctor 检测与降级 | 用户态写 vault 必被拒；提权覆盖与恢复流程通过；WSL / 无 sudo 环境优雅降级 | 🔶 部分完成（基础权限 700/600 + 原子覆盖 + `hpass harden` root 路径与非交互指引；sudo 自动重拉与不可变标志的中断恢复待补） |
+| **M4** 发布与文档（2-3 天） | README/AI 指引随开发完善、threat-model、release workflow（README、LICENSE、AI 部署指南已前置完成） | 三平台二进制 + 校验和发布；新机器 5 分钟上手 | 🔶 部分（ci.yml / release.yml 已就绪待 GitHub 首跑；threat-model.md 待写） |
+| **M5** 增强（按需） | OS keychain 解锁、agent 常驻、rotate、export/import、MCP server（`hpass mcp` 暴露 `credentialed_exec` 工具）、Argon2id、risky-pattern lint | 按特性单独验收 | ⬜ 按需（rotate 已提前实现并有测试） |
 
 ---
 

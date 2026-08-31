@@ -2,7 +2,7 @@
 
 > 面向 AI 编程工具的本地密码代填 CLI —— AI 只看到占位符和执行结果，密码永远不进入对话上下文。
 
-🚧 **状态：开发中**。架构与密码学设计已定稿（见 [PLAN.md](PLAN.md)），首个二进制发布前命令行为可能微调。
+**状态：v0.1.0 已实现** —— M0-M3 核心功能完成，84 个测试（53 单元 + 31 集成，macOS 全量）通过，Native AOT 二进制冒烟通过；Release 分发与 Windows/cmd 实测由 CI 覆盖（见 [PLAN.md](PLAN.md)）。
 
 ## 为什么需要 hpass
 
@@ -138,7 +138,8 @@ git clone git@github.com:harry7988/hpass.git && cd hpass
 
 ```bash
 dotnet build
-dotnet test
+dotnet test          # 84 个测试：单元（加密/vault/占位符/脱敏/执行引擎）+ 集成（CLI 全链路）
+dotnet publish src/HPass.Cli -c Release -r osx-arm64 /p:PublishAot=true -o publish
 ```
 
 ## 许可证

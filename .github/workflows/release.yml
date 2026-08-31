@@ -1,0 +1,45 @@
+name: release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: '发布标签（如 v0.1.0）'
+        required: true
+
+jobs:
+  publish:
+    name: Native AOT (${{ matrix.rid }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: macos-latest, rid: osx-arm64 }
+          - { os: macos-latest, rid: osx-x64 }
+          - { os: ubuntu-latest, rid: linux-x64 }
+          - { os: ubuntu-latest, rid: linux-arm64 }
+          - { os: windows-latest, rid: win-x64 }
+          - { os: windows-latest, rid: win-arm64 }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - run: dotnet publish src/HPass.Cli -c Release -r ${{ matrix.rid }} /p:PublishAot=true -o publish
+      - name: Pack
+        shell: bash
+        run: |
+          cd publish
+          if [ "${{ matrix.rid }}" = win-x64 ] || [ "${{ matrix.rid }}" = win-arm64 ]; then
+            7z a "../hpass-${{ matrix.rid }}.zip" hpass.exe
+          else
+            tar czf "../hpass-${{ matrix.rid }}.tar.gz" hpass
+          fi
+          cd .. && sha256sum hpass-* | tee SHA256SUMS-${{ matrix.rid }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hpass-${{ matrix.rid }}
+          path: |
+            hpass-${{ matrix.rid }}.*
+            SHA256SUMS-${{ matrix.rid }}

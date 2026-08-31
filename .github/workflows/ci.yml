@@ -1,0 +1,51 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    name: build & test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - run: dotnet build -c Debug
+      - run: dotnet test --no-build -c Debug
+
+  aot:
+    name: AOT smoke (${{ matrix.rid }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: macos-latest, rid: osx-arm64 }
+          - { os: ubuntu-latest, rid: linux-x64 }
+          - { os: windows-latest, rid: win-x64 }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - name: Publish Native AOT
+        run: dotnet publish src/HPass.Cli -c Release -r ${{ matrix.rid }} /p:PublishAot=true -o publish
+      - name: Smoke test binary
+        shell: bash
+        run: |
+          export HPASS_SMOKE="$RUNNER_TEMP/hpass-smoke"
+          rm -rf "$HPASS_SMOKE"
+          if [ "${{ matrix.rid }}" = "win-x64" ]; then B=publish/hpass.exe; else B=publish/hpass; fi
+          "$B" version
+          HPASS_PASSPHRASE=ci-pass-123 "$B" --home "$HPASS_SMOKE" init --no-harden
+          echo ci-secret-9 | HPASS_PASSPHRASE=ci-pass-123 "$B" --home "$HPASS_SMOKE" set db -u root --password-stdin
+          HPASS_PASSPHRASE=ci-pass-123 "$B" --home "$HPASS_SMOKE" exec -- sh -c 'echo {{db}}' | grep -F '{{db}}'
+          rm -rf "$HPASS_SMOKE"
