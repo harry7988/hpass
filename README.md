@@ -2,7 +2,7 @@
 
 > 面向 AI 编程工具的本地密码代填 CLI —— AI 只看到占位符和执行结果，密码永远不进入对话上下文。
 
-**状态：v0.1.0 已实现** —— M0-M3 核心功能完成，84 个测试（53 单元 + 31 集成，macOS 全量）通过，Native AOT 二进制冒烟通过；Release 分发与 Windows/cmd 实测由 CI 覆盖（见 [PLAN.md](PLAN.md)）。
+**状态：v0.1.0 已实现** —— 86 个测试全部通过（53 单元 + 33 集成），CI 三平台（macOS / Ubuntu / Windows）构建测试 + Native AOT 冒烟全绿；Release 分发待打 tag（见 [PLAN.md](PLAN.md)）。
 
 ## 为什么需要 hpass
 
@@ -128,9 +128,9 @@ git clone git@github.com:harry7988/hpass.git && cd hpass
 
 | 平台 | RID | 状态 |
 |---|---|---|
-| macOS (Apple Silicon / Intel) | osx-arm64 / osx-x64 | 计划 |
-| Linux (x64 / arm64) | linux-x64 / linux-arm64 | 计划 |
-| Windows (x64 / arm64) | win-x64 / win-arm64 | 计划 |
+| macOS (Apple Silicon / Intel) | osx-arm64 / osx-x64 | ✅ arm64 本地实测 + CI 绿 |
+| Linux (x64 / arm64) | linux-x64 / linux-arm64 | ✅ x64 CI 绿（bash/sh/pwsh） |
+| Windows (x64 / arm64) | win-x64 / win-arm64 | ✅ x64 CI 绿（pwsh 实测，cmd 按 §7.1 规则实现） |
 
 ## 开发
 
@@ -138,7 +138,7 @@ git clone git@github.com:harry7988/hpass.git && cd hpass
 
 ```bash
 dotnet build
-dotnet test          # 84 个测试：单元（加密/vault/占位符/脱敏/执行引擎）+ 集成（CLI 全链路）
+dotnet test          # 86 个测试：单元（加密/vault/占位符/脱敏/执行引擎）+ 集成（CLI 全链路）
 dotnet publish src/HPass.Cli -c Release -r osx-arm64 /p:PublishAot=true -o publish
 ```
 

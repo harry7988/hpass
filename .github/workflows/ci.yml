@@ -72,7 +72,7 @@ jobs:
           rm -rf "$HPASS_SMOKE"
           printf '%s' "$OUT" | grep -F '{{db}}'
       - name: Publish failure diagnostics
-        if: always()
+        if: failure()
         shell: bash
         run: |
           git config user.name ci-bot && git config user.email ci@hpass.local
