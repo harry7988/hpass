@@ -29,7 +29,16 @@ AI 收到：mysql: [输出] ...（若输出中出现密码，已被替换为 {{d
 
 ## 安装
 
-**方式 A：Release 二进制（推荐）**——从 [Releases](https://github.com/harry7988/hpass/releases) 下载对应平台的压缩包并校验：
+**方式 A：仓库内置二进制（最快）**——[dist/](dist/) 目录已提交六平台 Native AOT 二进制（与 Release 同源，附 SHA256SUMS）：
+
+```bash
+git clone git@github.com:harry7988/hpass.git && cd hpass
+shasum -a 256 --check dist/SHA256SUMS --ignore-missing   # 校验
+sudo cp dist/hpass-osx-arm64 /usr/local/bin/hpass
+# 平台对应：hpass-osx-arm64 | hpass-osx-x64 | hpass-linux-x64 | hpass-linux-arm64 | hpass-win-x64.exe | hpass-win-arm64.exe
+```
+
+**方式 B：[Releases](https://github.com/harry7988/hpass/releases) 下载**——压缩包 + 校验和：
 
 ```bash
 curl -LO https://github.com/harry7988/hpass/releases/latest/download/hpass-osx-arm64.tar.gz
@@ -38,7 +47,7 @@ shasum -a 256 --check SHA256SUMS --ignore-missing
 tar xzf hpass-osx-arm64.tar.gz && sudo mv hpass /usr/local/bin/
 ```
 
-**方式 B：源码构建**（需 .NET 10 SDK）：
+**方式 C：源码构建**（需 .NET 10 SDK）：
 
 ```bash
 git clone git@github.com:harry7988/hpass.git
