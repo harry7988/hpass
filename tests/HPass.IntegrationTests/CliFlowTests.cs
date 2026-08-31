@@ -413,13 +413,31 @@ public class CliFlowTests
     }
 
     [Fact]
-    public void Harden_NonInteractive_PrintsGuidance_NoDamage()
+    public void Harden_NonInteractive_NoDamage()
     {
-        var before = File.ReadAllText(Path.Combine(F.Home, "vault.json"));
-        var (exit, stdout, _) = F.Run("harden");
-        Assert.Equal(0, exit);
-        Assert.Contains(OperatingSystem.IsWindows() ? "icacls" : "sudo", stdout);
-        Assert.Equal(before, File.ReadAllText(Path.Combine(F.Home, "vault.json")));
+        if (!Hardening.Unix) return;
+        // 独立 home：harden 会改变保护标志（不改变内容）
+        var home = Path.Combine(Path.GetTempPath(), "hpass-it-hn-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            Environment.SetEnvironmentVariable("HPASS_PASSPHRASE", "init-pass-123");
+            Assert.Equal(0, F.RunIn(home, null, "init", "--no-harden").Exit);
+            Environment.SetEnvironmentVariable("HPASS_PASSPHRASE", null);
+            var before = File.ReadAllText(Path.Combine(home, "vault.json"));
+
+            var (exit, stdout, _) = F.RunIn(home, null, "harden");
+            Assert.Equal(0, exit);
+            Assert.Contains(OperatingSystem.IsMacOS() ? "uchg" : "sudo", stdout);
+            Assert.Equal(before, File.ReadAllText(Path.Combine(home, "vault.json")));
+            if (OperatingSystem.IsMacOS())
+                Assert.True(Hardening.IsImmutable(Path.Combine(home, "vault.json")));
+        }
+        finally
+        {
+            Hardening.ClearImmutable(Path.Combine(home, "vault.json"));
+            Hardening.ClearImmutable(Path.Combine(home, "master.key"));
+            try { Directory.Delete(home, true); } catch { }
+        }
     }
 
     [Fact]

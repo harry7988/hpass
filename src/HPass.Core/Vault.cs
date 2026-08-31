@@ -15,6 +15,7 @@ public sealed class Vault : IDisposable
     public string MasterKeyPath => Path.Combine(Dir, "master.key");
     public string ConfigPath => Path.Combine(Dir, "config.json");
     public string RunDir => Path.Combine(Dir, "run");
+    public string StagingDir => Path.Combine(RunDir, "staging");
 
     public VaultFile Data { get; private set; } = new();
     public HPassConfig Config { get; private set; } = new();
@@ -206,10 +207,24 @@ public sealed class Vault : IDisposable
             throw new UsageException($"{what} {name} 非法：仅允许字母/数字/下划线/连字符，以字母或数字开头，长度 1-64（'.' 为占位符分隔符，不允许出现在名字中）");
     }
 
+    /// <summary>
+    /// 两段式写入（I6）：先在用户可写的 run/staging 落盘密文，再经 SecureFile.InstallStaged
+    /// 完成"清保护 → 原子覆盖 → 重新加保护"（需要时自动 sudo 搬运，跨进程只移动密文）。
+    /// </summary>
     public void Save()
     {
         EnsureDirectory();
-        SecureFile.WriteAtomic(VaultPath, JsonSerializer.SerializeToUtf8Bytes(Data, HPassJsonContext.Default.VaultFile));
+        StageAndInstall("vault.json", VaultPath,
+            JsonSerializer.SerializeToUtf8Bytes(Data, HPassJsonContext.Default.VaultFile));
+    }
+
+    private void StageAndInstall(string name, string finalPath, byte[] data)
+    {
+        Directory.CreateDirectory(StagingDir);
+        var staging = Path.Combine(StagingDir, name + "." + Guid.NewGuid().ToString("N"));
+        File.WriteAllBytes(staging, data);
+        SecureFile.Restrict(staging);
+        SecureFile.InstallStaged(staging, finalPath, Dir);
     }
 
     public void SaveConfig(HPassConfig config)
@@ -227,7 +242,8 @@ public sealed class Vault : IDisposable
         var box = Crypto.Seal(key, priv, Encoding.UTF8.GetBytes("hpass/master.key"));
         priv.AsSpan().Clear();
         var master = new MasterKeyFile { Nonce = box.Nonce, Ct = box.Ct, Kdf = new KdfParams { Salt = Convert.ToBase64String(salt) } };
-        SecureFile.WriteAtomic(MasterKeyPath, JsonSerializer.SerializeToUtf8Bytes(master, HPassJsonContext.Default.MasterKeyFile));
+        StageAndInstall("master.key", MasterKeyPath,
+            JsonSerializer.SerializeToUtf8Bytes(master, HPassJsonContext.Default.MasterKeyFile));
     }
 
     private void EnsureDirectory()

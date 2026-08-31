@@ -13,6 +13,8 @@ public sealed class CliFixture : IDisposable
     public CliFixture()
     {
         Environment.SetEnvironmentVariable("HPASS_HOME", null);
+        // 测试环境禁用自动 sudo 提权（提权路径用 HPASS_NO_SUDO 短路；真实 sudo 流程由 CI 的 AOT 冒烟覆盖）
+        Environment.SetEnvironmentVariable("HPASS_NO_SUDO", "1");
         Environment.SetEnvironmentVariable("HPASS_PASSPHRASE", "init-pass-123");
         try
         {
@@ -29,11 +31,15 @@ public sealed class CliFixture : IDisposable
 
     public (int Exit, string Stdout, string Stderr) Run(params string[] args) => RunWithInput(null, args);
 
-    public (int Exit, string Stdout, string Stderr) RunWithInput(string? input, params string[] args)
+    public (int Exit, string Stdout, string Stderr) RunWithInput(string? input, params string[] args) =>
+        RunIn(Home, input, args);
+
+    /// <summary>在指定 home 上运行（加固流程测试使用独立 home，避免污染共享 fixture）。</summary>
+    public (int Exit, string Stdout, string Stderr) RunIn(string home, string? input, params string[] args)
     {
         using var stdout = new MemoryStream();
         using var stderr = new MemoryStream();
-        var full = new[] { "--home", Home }.Concat(args).ToArray();
+        var full = new[] { "--home", home }.Concat(args).ToArray();
         using var stdin = new StringReader(input ?? "");
         var exit = CliRunner.Run(full, stdout, stderr, stdin, interactive: false);
         var enc = new UTF8Encoding(false);
@@ -58,6 +64,7 @@ public sealed class CliFixture : IDisposable
 
     public void Dispose()
     {
+        Environment.SetEnvironmentVariable("HPASS_NO_SUDO", null);
         try { Directory.Delete(Home, recursive: true); } catch { }
     }
 }

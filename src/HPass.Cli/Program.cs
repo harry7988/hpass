@@ -61,6 +61,7 @@ public static class CliRunner
                 "exec" => ExecCommand.Run(ctx, cmdArgs),
                 "rotate" => Commands.Rotate(ctx, cmdArgs),
                 "harden" => Commands.Harden(ctx, cmdArgs),
+                "_install-staged" => Commands.InstallStaged(ctx, cmdArgs),
                 "doctor" => Commands.Doctor(ctx, cmdArgs),
                 "version" or "--version" or "-v" => VersionCmd(ctx),
                 "help" or "--help" or "-h" => Usage(ctx, ""),
@@ -82,6 +83,12 @@ public static class CliRunner
             // 不变式 I5：错误信息只含条目名/占位符，绝不含解析后的值
             ctx.ErrText.WriteLine($"hpass: 未知占位符 {e.Token}（{e.Message}）。可用 hpass list 查询已有条目");
             return ExitCodes.UnknownPlaceholder;
+        }
+        catch (Exception e)
+        {
+            // CLI 兜底：任何未预期错误（权限、IO 等）都以明确消息退出，不向用户抛栈、不泄露密文
+            ctx.ErrText.WriteLine($"hpass: {e.Message.Split('\n')[0]}");
+            return ExitCodes.Vault;
         }
     }
 

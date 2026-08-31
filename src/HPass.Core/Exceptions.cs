@@ -7,9 +7,26 @@ public sealed class UsageException : Exception
 }
 
 /// <summary>vault / 密钥 / 口令错误（退出码 3）。</summary>
-public sealed class VaultException : Exception
+public class VaultException : Exception
 {
     public VaultException(string message) : base(message) { }
+}
+
+/// <summary>
+/// 目标文件处于管理员写保护（root 属主 + schg/+i），用户态无法完成安装（I6）。
+/// 暂存文件只含密文，可安全交给 sudo 搬运。
+/// </summary>
+public sealed class NeedsElevationException : VaultException
+{
+    public string StagingPath { get; }
+    public string FinalPath { get; }
+
+    public NeedsElevationException(string stagingPath, string finalPath, string message)
+        : base(message)
+    {
+        StagingPath = stagingPath;
+        FinalPath = finalPath;
+    }
 }
 
 /// <summary>未知条目或字段（退出码 4）。消息中只允许出现条目名，绝不含密文。</summary>

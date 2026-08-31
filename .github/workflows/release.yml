@@ -1,11 +1,12 @@
 name: release
 
 on:
+  push:
+    tags: ['v*']
   workflow_dispatch:
-    inputs:
-      tag:
-        description: '发布标签（如 v0.1.0）'
-        required: true
+
+permissions:
+  contents: write
 
 jobs:
   publish:
@@ -15,31 +16,60 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # arm64 用原生 arm runner（公开仓库免费），osx-x64 在 arm mac 上交叉编译；
+          # arm64 runner 标记 continue-on-error，个别平台问题不阻塞 Release（产物缺哪个会在 Release 里少哪个）
           - { os: macos-latest, rid: osx-arm64 }
           - { os: macos-latest, rid: osx-x64 }
           - { os: ubuntu-latest, rid: linux-x64 }
-          - { os: ubuntu-latest, rid: linux-arm64 }
+          - { os: ubuntu-24.04-arm, rid: linux-arm64, flaky: true }
           - { os: windows-latest, rid: win-x64 }
-          - { os: windows-latest, rid: win-arm64 }
+          - { os: windows-11-arm, rid: win-arm64, flaky: true }
+    continue-on-error: ${{ matrix.flaky == true }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 10.0.x
-      - run: dotnet publish src/HPass.Cli -c Release -r ${{ matrix.rid }} /p:PublishAot=true -o publish
+      - name: Smoke test before pack
+        shell: bash
+        run: dotnet publish src/HPass.Cli -c Release -r ${{ matrix.rid }} /p:PublishAot=true -o publish
       - name: Pack
         shell: bash
         run: |
           cd publish
-          if [ "${{ matrix.rid }}" = win-x64 ] || [ "${{ matrix.rid }}" = win-arm64 ]; then
+          if [[ "${{ matrix.rid }}" == win-* ]]; then
             7z a "../hpass-${{ matrix.rid }}.zip" hpass.exe
           else
             tar czf "../hpass-${{ matrix.rid }}.tar.gz" hpass
           fi
-          cd .. && sha256sum hpass-* | tee SHA256SUMS-${{ matrix.rid }}
       - uses: actions/upload-artifact@v4
         with:
           name: hpass-${{ matrix.rid }}
-          path: |
-            hpass-${{ matrix.rid }}.*
-            SHA256SUMS-${{ matrix.rid }}
+          path: hpass-${{ matrix.rid }}.*
+
+  release:
+    name: Create GitHub Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: publish
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: hpass-*
+          path: dist
+          merge-multiple: true
+      - name: Checksums
+        run: cd dist && sha256sum hpass-* | tee SHA256SUMS && ls -la
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          echo "发布 $TAG，产物："
+          ls dist
+          gh release create "$TAG" dist/* \
+            --title "hpass $TAG" \
+            --generate-notes \
+            --notes "Native AOT 单文件二进制（macOS arm64/x64、Linux x64/arm64、Windows x64/arm64）。
+          下载后校验：shasum -a 256 --check SHA256SUMS --ignore-missing
+          安装：解压后放入 PATH；AI 部署见 docs/ai-deploy-guide.md，Skill 安装见 skills/hpass/install.sh。"

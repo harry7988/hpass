@@ -201,68 +201,68 @@ public static class Commands
     }
 
     /// <summary>
-    /// 特权加固（M3）：root/Admin 属主 + 不可变标志/ACL，密码文件只可整体覆盖。
-    /// 当前进程非 root 时，交互环境提示经 sudo 重拉自身；非交互环境打印手动步骤。
+    /// 特权加固（M3 / PLAN §5.1）：密码文件只可整体覆盖。
+    /// - root（sudo 重拉）→ 管理员级：root 属主 440 + schg/chattr +i；
+    /// - macOS 普通用户 → 用户级 uchg 不可变（属主可清，set 等命令会自动清/复加）；
+    /// - Linux 普通用户 → 无法 chattr：交互模式经 sudo 重拉自身，非交互打印指引。
     /// </summary>
     public static int Harden(CliContext ctx, string[] args)
     {
         if (!Vault.Exists(ctx.Home))
             throw new VaultException($"未找到 vault（{ctx.Home}），请先 hpass init");
 
-        if (!OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS())
+        if (!Hardening.Unix)
         {
             ctx.OutText.WriteLine("Windows 平台：请以管理员运行以下命令设置 ACL（用户只读，Administrators/SYSTEM 完全控制）：");
             ctx.OutText.WriteLine($"  icacls \"{ctx.Home}\" /inheritance:r /grant:r Administrators:F /grant:r SYSTEM:F /grant:r {Environment.UserName}:RX");
             return ExitCodes.Ok;
         }
 
-        var isRoot = Environment.UserName == "root" || Environment.GetEnvironmentVariable("SUDO_USER") is not null && Environment.UserName == "root";
-        if (!isRoot)
+        if (Hardening.IsRoot())
         {
-            if (ctx.Interactive)
-            {
-                ctx.OutText.WriteLine("将以 sudo 重新执行加固（root 属主 + 不可变标志，密码文件将只可整体覆盖）。");
-                ctx.OutText.WriteLine("如需自动化，请直接运行：sudo hpass --home \"" + ctx.Home + "\" harden");
-                return ExitCodes.Ok;
-            }
-            ctx.OutText.WriteLine($"非交互环境：请手动运行 sudo hpass --home \"{ctx.Home}\" harden");
+            Hardening.ApplyRootOwnership(ctx.Home);
+            ctx.OutText.WriteLine("已加固（管理员级）：root 属主 + 不可变标志（schg / chattr +i），密码文件只可整体覆盖。");
+            ctx.OutText.WriteLine($"exec 读路径无需提权；后续 set/delete/rename/rotate 会自动经 sudo 搬运安装（也可手动：sudo hpass --home \"{ctx.Home}\" …）");
             return ExitCodes.Ok;
         }
 
-        // root 路径：属主 root、目录 750、文件 440、不可变标志
-        var user = Environment.GetEnvironmentVariable("SUDO_USER") ?? Environment.UserName;
-        var group = Environment.GetEnvironmentVariable("SUDO_GROUP") ?? "wheel";
-        foreach (var (dir, mode) in new[] { (ctx.Home, "750"), (Path.Combine(ctx.Home, "run"), "700") })
-            Run("chown", $"root:{group} \"{dir}\" && chmod {mode} \"{dir}\"");
-        foreach (var f in new[] { "vault.json", "master.key", "config.json" })
+        if (OperatingSystem.IsMacOS())
         {
-            var p = Path.Combine(ctx.Home, f);
-            if (!File.Exists(p)) continue;
-            Run("chown", $"root:{group} \"{p}\" && chmod 440 \"{p}\"");
-            if (OperatingSystem.IsMacOS()) _ = RunSh($"chflags schg \"{p}\"");
-            else _ = RunSh($"chattr +i \"{p}\"");
+            foreach (var f in Hardening.CoreFiles)
+                Hardening.SetImmutable(Path.Combine(ctx.Home, f));
+            ctx.OutText.WriteLine("已加固（用户级 uchg 不可变）：文件只能整体覆盖（hpass 内部自动清/复加）。");
+            ctx.OutText.WriteLine($"升级为管理员级（root 属主 + schg）：sudo hpass --home \"{ctx.Home}\" harden");
+            return ExitCodes.Ok;
         }
-        ctx.OutText.WriteLine($"已加固：root 属主 + 不可变标志（用户 {user} 只读）。");
-        ctx.OutText.WriteLine("提示：exec 读路径无需提权；后续 set/delete/rename 需先 sudo hpass … 或运行 hpass unharden（未实现，用 chflags nouchg/chattr -i）");
+
+        // Linux 普通用户：chattr 需提权
+        if (ctx.Interactive)
+        {
+            ctx.OutText.WriteLine("将以 sudo 重新执行加固（root 属主 + chattr +i）…");
+            var exe = Environment.ProcessPath
+                ?? throw new VaultException("无法定位 hpass 可执行文件");
+            var (code, _) = Hardening.RunCapture("sudo", ["--", exe, "--home", ctx.Home, "harden"], showOutput: true);
+            return code == 0 ? ExitCodes.Ok : ExitCodes.Vault;
+        }
+        ctx.OutText.WriteLine($"非交互环境（Linux 普通用户无法 chattr）：请手动运行 sudo hpass --home \"{ctx.Home}\" harden");
         return ExitCodes.Ok;
+    }
 
-        static int Run(string _, string sh)
-        {
-            var psi = new System.Diagnostics.ProcessStartInfo("/bin/sh", ["-c", sh])
-            { UseShellExecute = false, RedirectStandardError = true };
-            using var p = System.Diagnostics.Process.Start(psi)!;
-            p.WaitForExit(5000);
-            return p.ExitCode;
-        }
-
-        static string RunSh(string sh)
-        {
-            var psi = new System.Diagnostics.ProcessStartInfo("/bin/sh", ["-c", sh])
-            { UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true };
-            using var p = System.Diagnostics.Process.Start(psi)!;
-            p.WaitForExit(5000);
-            return p.StandardOutput.ReadToEnd();
-        }
+    /// <summary>内部命令：提权子进程的"密文搬运"（清保护 → 原子覆盖 → 恢复 root 属主与保护）。仅在提权中使用。</summary>
+    public static int InstallStaged(CliContext ctx, string[] args)
+    {
+        if (args.Length != 2) throw new UsageException("用法（内部）：hpass _install-staged <暂存文件> <最终路径>");
+        var staging = Path.GetFullPath(args[0]);
+        var final = Path.GetFullPath(args[1]);
+        var stagingRoot = Path.GetFullPath(Path.Combine(ctx.Home, "run", "staging"));
+        if (!staging.StartsWith(stagingRoot + Path.DirectorySeparatorChar, StringComparison.Ordinal))
+            throw new UsageException($"安全限制：暂存文件必须位于 {stagingRoot} 之下");
+        var allowed = new[] { "vault.json", "master.key", "config.json" }
+            .Select(n => Path.GetFullPath(Path.Combine(ctx.Home, n)));
+        if (!allowed.Contains(final))
+            throw new UsageException("安全限制：最终路径只能是 vault.json / master.key / config.json");
+        SecureFile.InstallStagedDirect(staging, final);
+        return ExitCodes.Ok;
     }
 
     public static int Doctor(CliContext ctx, string[] args)
@@ -270,6 +270,11 @@ public static class Commands
         ctx.OutText.WriteLine($"home     : {ctx.Home}");
         ctx.OutText.WriteLine($"platform : {System.Runtime.InteropServices.RuntimeInformation.OSDescription} {System.Runtime.InteropServices.RuntimeInformation.OSArchitecture}");
         var ok = true;
+
+        // 中断检测与恢复（I6 / §5.1）：先清理残留暂存（仅密文，可安全删除）
+        var cleaned = Hardening.CleanStaging(ctx.Home);
+        if (cleaned > 0)
+            ctx.OutText.WriteLine($"中断残留 : 已清理 {cleaned} 个未安装的暂存文件（run/staging，仅密文）");
 
         if (Vault.Exists(ctx.Home))
         {
@@ -279,7 +284,8 @@ public static class Commands
             {
                 var mode = File.GetUnixFileMode(ctx.Home);
                 var tight = mode.HasFlag(UnixFileMode.UserRead) && mode.HasFlag(UnixFileMode.UserWrite) && !mode.HasFlag(UnixFileMode.GroupRead) && !mode.HasFlag(UnixFileMode.OtherRead);
-                ctx.OutText.WriteLine($"目录权限 : {(tight ? "700（基础模式，符合预期）" : $"{Convert.ToString((int)mode, 8)}（建议 700；运行 hpass harden 可升级管理员写保护）")}");
+                ctx.OutText.WriteLine($"目录权限 : {(tight ? "700（符合预期）" : $"{Convert.ToString((int)mode, 8)}（建议 700）")}");
+                ReportProtection(ctx);
             }
             else ctx.OutText.WriteLine("目录权限 : Windows ACL（建议 Administrators/SYSTEM 完全控制、当前用户读写）");
             try
@@ -295,6 +301,42 @@ public static class Commands
             ctx.OutText.WriteLine("vault    : 未初始化（hpass init）");
         }
         return ok ? ExitCodes.Ok : ExitCodes.Vault;
+    }
+
+    /// <summary>保护状态报告 + 中断的加固自动恢复（补齐缺失保护）。</summary>
+    private static void ReportProtection(CliContext ctx)
+    {
+        var level = Hardening.GetLevel(ctx.Home);
+        switch (level)
+        {
+            case Hardening.Level.Hardened:
+                ctx.OutText.WriteLine($"保护状态 : 已加固（{Hardening.Describe(ctx.Home)}）：密码文件只可整体覆盖");
+                return;
+            case Hardening.Level.Interrupted:
+                ctx.OutText.Write("保护状态 : 中断的加固（部分文件受保护）→ ");
+                if (Hardening.IsRoot())
+                {
+                    Hardening.ApplyRootOwnership(ctx.Home);
+                    ctx.OutText.WriteLine("已自动修复（管理员级）");
+                }
+                else if (OperatingSystem.IsMacOS())
+                {
+                    foreach (var f in Hardening.CoreFiles)
+                    {
+                        var p = Path.Combine(ctx.Home, f);
+                        if (File.Exists(p) && !Hardening.IsProtected(p)) Hardening.SetImmutable(p);
+                    }
+                    ctx.OutText.WriteLine("已自动补齐用户级不可变（uchg）；管理员级请 sudo hpass harden");
+                }
+                else
+                {
+                    ctx.OutText.WriteLine($"Linux 普通用户无法补齐 chattr，请运行 sudo hpass --home \"{ctx.Home}\" harden");
+                }
+                return;
+            default:
+                ctx.OutText.WriteLine("保护状态 : 基础模式（700/600）。可运行 hpass harden 启用不可变写保护");
+                return;
+        }
     }
 
     private static string Value(string[] args, ref int i, string err)
