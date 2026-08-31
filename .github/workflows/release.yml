@@ -66,7 +66,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          TAG="${GITHUB_REF#refs/tags/v}"
+          TAG="${GITHUB_REF#refs/tags/}"
           cat > release-notes.md <<'EOF'
           Native AOT 单文件二进制（macOS arm64/x64、Linux x64/arm64、Windows x64/arm64）。
 
