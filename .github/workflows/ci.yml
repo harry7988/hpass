@@ -19,7 +19,21 @@ jobs:
         with:
           dotnet-version: 10.0.x
       - run: dotnet build -c Debug
-      - run: dotnet test --no-build -c Debug
+      - name: Test
+        shell: bash
+        run: |
+          set -o pipefail
+          dotnet test --no-build -c Debug 2>&1 | tee test.log
+          status=$?
+          if [ $status -ne 0 ]; then
+            {
+              echo "## dotnet test 失败输出（尾部 400 行）"
+              echo '```'
+              tail -400 test.log
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+          exit $status
 
   aot:
     name: AOT smoke (${{ matrix.rid }})
@@ -44,8 +58,10 @@ jobs:
           export HPASS_SMOKE="$RUNNER_TEMP/hpass-smoke"
           rm -rf "$HPASS_SMOKE"
           if [ "${{ matrix.rid }}" = "win-x64" ]; then B=publish/hpass.exe; else B=publish/hpass; fi
+          set -x
           "$B" version
           HPASS_PASSPHRASE=ci-pass-123 "$B" --home "$HPASS_SMOKE" init --no-harden
           echo ci-secret-9 | HPASS_PASSPHRASE=ci-pass-123 "$B" --home "$HPASS_SMOKE" set db -u root --password-stdin
-          HPASS_PASSPHRASE=ci-pass-123 "$B" --home "$HPASS_SMOKE" exec -- sh -c 'echo {{db}}' | grep -F '{{db}}'
+          HPASS_PASSPHRASE=ci-pass-123 "$B" --home "$HPASS_SMOKE" exec -- sh -c 'echo {{db}}' | tee smoke.log | grep -F '{{db}}'
           rm -rf "$HPASS_SMOKE"
+        # 诊断：失败时把输出放进 job summary（可通过公开 API 读取）
