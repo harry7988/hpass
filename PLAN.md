@@ -276,6 +276,7 @@ h-password/
 │   ├── ai-deploy-guide.md     # AI 部署/使用指南（含条目模型与查询接口）✅ 已建
 │   ├── threat-model.md
 │   └── usage.md               # 面向人的使用说明
+├── skills/hpass/               # AI Skill（SKILL.md + install.sh），README 有安装说明 ✅ 已建
 ├── .github/workflows/          # ci.yml（三平台测试+AOT 冒烟）、release.yml
 ├── LICENSE（MIT）/ README.md   # ✅ 已建
 └── PLAN.md

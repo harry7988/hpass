@@ -99,6 +99,18 @@ hpass exec -f deploy.sh          # 脚本内写 {{db-local}}，替换后经 stdi
 
 完整部署 runbook 与故障排查：[docs/ai-deploy-guide.md](docs/ai-deploy-guide.md)。
 
+### 安装 AI Skill（推荐）
+
+仓库内置面向 Agent 的 [skills/hpass](skills/hpass/)（含 `SKILL.md` 与安装脚本），安装后 AI 会自动遵循占位符与脱敏规则，无需手动粘贴契约：
+
+```bash
+git clone git@github.com:harry7988/hpass.git && cd hpass
+./skills/hpass/install.sh                    # 自动探测 ~/.claude/skills > ~/.zcode/skills > ~/.agents/skills
+# 或指定目录：./skills/hpass/install.sh ~/.claude/skills
+```
+
+手动安装：将 `skills/hpass/` 整个目录复制到对应工具的 skills 目录 —— Claude Code `~/.claude/skills/`、ZCode `~/.zcode/skills/`、通用 `~/.agents/skills/`；项目级放 `<项目>/.claude/skills/`。Windows 直接复制文件夹即可。
+
 ## 安全设计摘要
 
 六条安全不变量约束所有实现（全文见 [PLAN.md](PLAN.md) §1）：
