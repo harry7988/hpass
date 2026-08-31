@@ -63,6 +63,9 @@ public static class ShellLauncher
 
     private static bool ExistsOnPath(string exe)
     {
+        // Windows 的 File.Exists 不会自动补 .exe，必须显式带上
+        if (OperatingSystem.IsWindows() && Path.GetExtension(exe).Length == 0)
+            exe += ".exe";
         if (File.Exists(exe)) return true;
         var pathVar = Environment.GetEnvironmentVariable("PATH") ?? "";
         var sep = OperatingSystem.IsWindows() ? ';' : ':';
@@ -70,9 +73,7 @@ public static class ShellLauncher
         {
             try
             {
-                var candidate = Path.Combine(dir.Trim(), exe);
-                if (File.Exists(candidate)) return true;
-                if (OperatingSystem.IsLinux() && File.Exists(candidate)) return true;
+                if (File.Exists(Path.Combine(dir.Trim(), exe))) return true;
             }
             catch { }
         }

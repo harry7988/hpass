@@ -333,6 +333,31 @@ public class CliFlowTests
     }
 
     [Fact]
+    public void Exec_ShellNone_WorksOnAllPlatforms_WithPwsh()
+    {
+        // 覆盖 Windows：--shell none 直接 spawn（不经 shell 引号转换）
+        var (probe, _, _) = F.Run("exec", "--shell", "none", "--", "pwsh", "-NoProfile", "-Command", "Write-Output ok");
+        if (probe != 0) return; // 无 pwsh 环境跳过
+
+        var (exit, stdout, _) = F.Run("exec", "--shell", "none", "--",
+            "pwsh", "-NoProfile", "-Command", "Write-Output u={{db.user}}");
+        Assert.Equal(0, exit);
+        Assert.Contains("u=root", stdout);
+    }
+
+    [Fact]
+    public void Exec_AutoShell_Detected_AcrossPlatforms()
+    {
+        // auto 在 Windows 应找到 pwsh（带 .exe 探测），Unix 找到 bash/sh
+        var (exit, stdout, _) = F.Run("doctor");
+        Assert.Equal(0, exit);
+        if (OperatingSystem.IsWindows())
+            Assert.Contains("auto → pwsh", stdout);
+        else
+            Assert.Matches(new System.Text.RegularExpressions.Regex("auto → (bash|sh|zsh)"), stdout);
+    }
+
+    [Fact]
     public void Exec_PasswordArgWithSpaces_SingleArg()
     {
         if (!Unix) return;
