@@ -30,9 +30,10 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 10.0.x
-      - name: Smoke test before pack
+      - name: Publish Native AOT
         shell: bash
-        run: dotnet publish src/HPass.Cli -c Release -r ${{ matrix.rid }} /p:PublishAot=true -o publish
+        run: dotnet publish src/HPass.Cli -c Release -r ${{ matrix.rid }} -p:PublishAot=true -o publish
+        # 注意：此步骤为 bash，-p: 形式避免 Windows 上 MSYS 把 /p: 当 POSIX 路径转换
       - name: Pack
         shell: bash
         run: |
