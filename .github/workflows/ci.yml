@@ -56,32 +56,28 @@ jobs:
       - name: Smoke test binary
         shell: bash
         run: |
-          {
-            echo "== env =="
-            uname -a || ver
-            command -v sh bash pwsh cmd 2>/dev/null || true
-            echo "== run =="
-            export HPASS_SMOKE="$RUNNER_TEMP/hpass-smoke"
-            rm -rf "$HPASS_SMOKE"
-            if [ "${{ matrix.rid }}" = "win-x64" ]; then B=publish/hpass.exe; else B=publish/hpass; fi
-            set -x
-            "$B" version
-            HPASS_PASSPHRASE=ci-pass-123 "$B" --home "$HPASS_SMOKE" init --no-harden
-            echo ci-secret-9 | HPASS_PASSPHRASE=ci-pass-123 "$B" --home "$HPASS_SMOKE" set db -u root --password-stdin
-            HPASS_PASSPHRASE=ci-pass-123 "$B" --home "$HPASS_SMOKE" exec -- sh -c 'echo {{db}}' | tee -a smoke.log | grep -F '{{db}}'
-            grep_exit=$?
-            set +x
-            rm -rf "$HPASS_SMOKE"
-            exit $grep_exit
-          } 2>&1 | tee smoke-full.log
-          exit ${PIPESTATUS[0]}
+          exec > smoke-full.log 2>&1
+          echo "== env =="
+          uname -a || true
+          command -v sh bash pwsh cmd.exe 2>/dev/null || true
+          echo "== run =="
+          export HPASS_SMOKE="$RUNNER_TEMP/hpass-smoke"
+          rm -rf "$HPASS_SMOKE"
+          if [ "${{ matrix.rid }}" = "win-x64" ]; then B=publish/hpass.exe; else B=publish/hpass; fi
+          echo "B=$B"
+          "$B" version; echo "version-exit=$?"
+          HPASS_PASSPHRASE=ci-pass-123 "$B" --home "$HPASS_SMOKE" init --no-harden; echo "init-exit=$?"
+          echo ci-secret-9 | HPASS_PASSPHRASE=ci-pass-123 "$B" --home "$HPASS_SMOKE" set db -u root --password-stdin; echo "set-exit=$?"
+          OUT=$(HPASS_PASSPHRASE=ci-pass-123 "$B" --home "$HPASS_SMOKE" exec -- sh -c 'echo {{db}}'); echo "exec-exit=$? exec-out=[$OUT]"
+          rm -rf "$HPASS_SMOKE"
+          printf '%s' "$OUT" | grep -F '{{db}}'
       - name: Publish failure diagnostics
-        if: failure()
+        if: always()
         shell: bash
         run: |
           git config user.name ci-bot && git config user.email ci@hpass.local
           mkdir -p diagnostics
-          cp smoke-full.log "diagnostics/aot-${{ matrix.rid }}.log" 2>/dev/null || true
+          cp smoke-full.log "diagnostics/aot-${{ matrix.rid }}.log" || true
           git add diagnostics || true
           git commit -m "diag: aot-${{ matrix.rid }}" || true
-          git push origin HEAD:ci-diag/aot-${{ matrix.rid }}
+          git push --force origin HEAD:ci-diag/aot-${{ matrix.rid }}
