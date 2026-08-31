@@ -54,6 +54,7 @@ jobs:
     needs: publish
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
           pattern: hpass-*
@@ -65,12 +66,29 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          TAG="${GITHUB_REF#refs/tags/}"
-          echo "发布 $TAG，产物："
-          ls dist
-          gh release create "$TAG" dist/* \
-            --title "hpass $TAG" \
-            --generate-notes \
-            --notes "Native AOT 单文件二进制（macOS arm64/x64、Linux x64/arm64、Windows x64/arm64）。
-          下载后校验：shasum -a 256 --check SHA256SUMS --ignore-missing
-          安装：解压后放入 PATH；AI 部署见 docs/ai-deploy-guide.md，Skill 安装见 skills/hpass/install.sh。"
+          TAG="${GITHUB_REF#refs/tags/v}"
+          cat > release-notes.md <<'EOF'
+          Native AOT 单文件二进制（macOS arm64/x64、Linux x64/arm64、Windows x64/arm64）。
+
+          ## 安装
+          1. 下载对应平台压缩包，校验：`shasum -a 256 --check SHA256SUMS --ignore-missing`
+          2. 解压后放入 PATH（如 /usr/local/bin）
+          3. AI 部署 runbook：docs/ai-deploy-guide.md；AI Skill 安装：skills/hpass/install.sh
+
+          ## 快速上手
+          hpass init → hpass set db -t database -u root -T prod → hpass exec -- mysql -u {{db.user}} -p{{db}} …
+          （密码只在加密库与子进程间流动，永不进入 AI 对话上下文）
+          EOF
+          sed -i 's/^          //' release-notes.md
+          echo "TAG=$TAG"; ls dist
+          gh release create "$TAG" dist/* --title "hpass $TAG" --generate-notes --notes-file release-notes.md 2>&1 | tee gh-release.log
+          exit ${PIPESTATUS[0]}
+      - name: Publish failure diagnostics
+        if: failure()
+        run: |
+          git config user.name ci-bot && git config user.email ci@hpass.local
+          mkdir -p diagnostics
+          cp gh-release.log diagnostics/ 2>/dev/null || true
+          git add diagnostics || true
+          git commit -m "diag: release-create" || true
+          git push --force origin HEAD:ci-diag/release
