@@ -227,7 +227,9 @@ public class CliFlowTests
         {
             var (exit, stdout, _) = F.RunAs("init-pass-123", "exec", "-f", script, "--shell", "pwsh");
             Assert.Equal(0, exit);
-            Assert.Equal("pw={{db}}\n", stdout);
+            // runner 上 pwsh 会包裹 VT 转义序列：断言脱敏存在、密文不存在即可
+            Assert.Contains("pw={{db}}", stdout);
+            Assert.DoesNotContain(CliFixture.DbPassword, stdout);
         }
         finally { File.Delete(script); }
     }
@@ -391,7 +393,7 @@ public class CliFlowTests
         var before = File.ReadAllText(Path.Combine(F.Home, "vault.json"));
         var (exit, stdout, _) = F.Run("harden");
         Assert.Equal(0, exit);
-        Assert.Contains("sudo", stdout);
+        Assert.Contains(OperatingSystem.IsWindows() ? "icacls" : "sudo", stdout);
         Assert.Equal(before, File.ReadAllText(Path.Combine(F.Home, "vault.json")));
     }
 

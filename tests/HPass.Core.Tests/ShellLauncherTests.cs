@@ -137,7 +137,9 @@ public class ShellLauncherTests : IDisposable
         File.WriteAllText(script, "Write-Output \"pw={{db}}\"\n");
         var (exit, output) = Run(Script(script, "pwsh"));
         Assert.Equal(0, exit);
-        Assert.Equal("pw={{db}}" + Environment.NewLine, output);
+        // runner 上的 pwsh 会在输出外包裹 VT 转义序列，产品应原样透传：只断言脱敏结果存在、密文不存在
+        Assert.Contains("pw={{db}}", output);
+        Assert.DoesNotContain("resolved-db", output);
     }
 
     [Fact]
