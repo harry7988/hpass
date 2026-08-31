@@ -284,7 +284,7 @@ h-password/
 │   └── HPass.IntegrationTests/ # 真实 shell 矩阵测试（按 OS 条件编译启用）
 ├── docs/
 │   ├── ai-deploy-guide.md     # AI 部署/使用指南（含条目模型与查询接口）✅ 已建
-│   ├── threat-model.md
+│   ├── threat-model.md        # 威胁模型（防什么/不防什么/加固语义/密码学参数）✅ 已建
 │   └── usage.md               # 面向人的使用说明
 ├── skills/hpass/               # AI Skill（SKILL.md + install.sh），README 有安装说明 ✅ 已建
 ├── .github/workflows/          # ci.yml（三平台测试+AOT 冒烟）、release.yml
@@ -319,8 +319,8 @@ h-password/
 | **M0** 工程底座（1-2 天） | solution、双项目、CI 三平台、AOT 发布管线骨架 | 三平台 AOT 产物可运行 `hpass version` | ✅ 完成（CI 六任务全绿：三平台构建测试 + 三平台 AOT 冒烟） |
 | **M1** 保险库（3-5 天） | init/set/inspect/list/delete/rename + 扩展条目模型（类型/账号/租户/自定义字段）+ 全套加密 + 单测（基础权限模式，加固在 M3） | roundtrip 通过；错误口令拒绝；文件权限正确；篡改检测；list/inspect 无密文值泄露 | ✅ 完成（单测 + 集成覆盖，三平台 CI 通过） |
 | **M2** 执行引擎（4-6 天） | exec 三模式、shell 矩阵、流式脱敏、env 注入、超时、退出码 | 集成测试矩阵全绿；`echo {{db}}` 输出已脱敏；env 模式 ps 不可见 | ✅ 完成（bash/sh/pwsh 实测 + Windows auto→pwsh 实测修复 .exe 探测 bug；env 注入 argv 干净） |
-| **M3** 特权加固（2-4 天） | §5.1 全平台：root/Admin 属主、不可变标志 / ACL、提权原子覆盖、中断恢复、doctor 检测与降级 | 用户态写 vault 必被拒；提权覆盖与恢复流程通过；WSL / 无 sudo 环境优雅降级 | 🔶 部分完成（基础权限 700/600 + 原子覆盖 + 写失败不产生半写状态 + `hpass harden` root 路径与非交互指引；sudo 自动重拉与不可变标志的中断恢复待补） |
-| **M4** 发布与文档（2-3 天） | README/AI 指引随开发完善、threat-model、release workflow（README、LICENSE、AI 部署指南已前置完成） | 三平台二进制 + 校验和发布；新机器 5 分钟上手 | 🔶 部分（ci.yml 三平台绿；release.yml 就绪待打 tag 发布；threat-model.md 待写） |
+| **M3** 特权加固（2-4 天） | §5.1 全平台：root/Admin 属主、不可变标志 / ACL、提权原子覆盖、中断恢复、doctor 检测与降级 | 用户态写 vault 必被拒；提权覆盖与恢复流程通过；WSL / 无 sudo 环境优雅降级 | ✅ 完成（vault 唯一写入口 = staged 安装：清保护→原子覆盖→重加保护；用户级 uchg 本地全链路测试；root 属主 + schg/+i 由 CI AOT 冒烟以真实 sudo 验证（自动 `-n` 优先、交互兜底、`_install-staged` 仅搬运密文且有路径白名单）；doctor 清理 staging 残留 + 中断保护自动补齐；提权失败无半写、暂存仅密文；Windows icacls 指引） |
+| **M4** 发布与文档（2-3 天） | README/AI 指引随开发完善、threat-model、release workflow（README、LICENSE、AI 部署指南已前置完成） | 三平台二进制 + 校验和发布；新机器 5 分钟上手 | ✅ 完成（ci.yml 三平台全绿含 root 加固流程；threat-model.md 已写；release.yml 于 v* tag 触发，六 RID 产物 + SHA256SUMS 创建 GitHub Release） |
 | **M5** 增强（按需） | OS keychain 解锁、agent 常驻、rotate、export/import、MCP server（`hpass mcp` 暴露 `credentialed_exec` 工具）、Argon2id、risky-pattern lint | 按特性单独验收 | ⬜ 按需（rotate 已提前实现并有测试） |
 
 ---

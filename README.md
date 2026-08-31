@@ -2,7 +2,7 @@
 
 > 面向 AI 编程工具的本地密码代填 CLI —— AI 只看到占位符和执行结果，密码永远不进入对话上下文。
 
-**状态：v0.1.0 已实现** —— 86 个测试全部通过（53 单元 + 33 集成），CI 三平台（macOS / Ubuntu / Windows）构建测试 + Native AOT 冒烟全绿；Release 分发待打 tag（见 [PLAN.md](PLAN.md)）。
+**状态：v0.1.0 已实现** —— 100 个测试全部通过（60 单元 + 40 集成），CI 三平台（macOS / Ubuntu / Windows）构建测试 + Native AOT 冒烟（含真实 sudo 的管理员级加固流程）全绿；威胁模型见 [docs/threat-model.md](docs/threat-model.md)，里程碑状态见 [PLAN.md](PLAN.md)。
 
 ## 为什么需要 hpass
 
@@ -23,12 +23,21 @@ AI 收到：mysql: [输出] ...（若输出中出现密码，已被替换为 {{d
 - **包装四种 shell**：bash / sh / pwsh / cmd，跨平台自动探测或显式指定。
 - **扩展条目模型**：账号类型、账号、租户、自定义字段 —— 元数据可查（AI 组装命令用），密码与字段值不可查。
 - **信封加密**：口令 → PBKDF2 → 加密 RSA-3072 私钥 → OAEP 包裹 AES-256 数据密钥 → 每条 AEAD 加密（AAD 防密文互换）。
-- **特权加固**（可选，默认开启）：vault 文件 root/Administrator 属主 + 不可变标志（`chflags schg` / `chattr +i`）/ ACL 拒写，只能整体覆盖、不能直接修改；`exec` 读路径永不提权。
+- **特权加固**：vault 变更唯一入口是"staged 安装"（清保护 → 原子覆盖 → 重新加保护）。`hpass harden` 一键加固——root 属主 + 不可变标志（`schg`/`chattr +i`，macOS 普通用户可用 `uchg` 用户级保护）；管理员写保护下 `set` 等命令自动经 sudo 搬运**密文**完成安装（`_install-staged`，带路径白名单）；`doctor` 检测并恢复中断的加固/残留暂存；`exec` 读路径永不提权。
 - **C# Native AOT 单文件二进制**：macOS / Linux / Windows 六个 RID，零运行时依赖。
 
 ## 安装
 
-> 首个 Release 尚未发布。当前可从源码构建（需 .NET 10 SDK）：
+**方式 A：Release 二进制（推荐）**——从 [Releases](https://github.com/harry7988/hpass/releases) 下载对应平台的压缩包并校验：
+
+```bash
+curl -LO https://github.com/harry7988/hpass/releases/latest/download/hpass-osx-arm64.tar.gz
+curl -LO https://github.com/harry7988/hpass/releases/latest/download/SHA256SUMS
+shasum -a 256 --check SHA256SUMS --ignore-missing
+tar xzf hpass-osx-arm64.tar.gz && sudo mv hpass /usr/local/bin/
+```
+
+**方式 B：源码构建**（需 .NET 10 SDK）：
 
 ```bash
 git clone git@github.com:harry7988/hpass.git
@@ -122,7 +131,7 @@ git clone git@github.com:harry7988/hpass.git && cd hpass
 5. 日志/错误永不回显已解析命令
 6. vault 变更仅经特权原子覆盖，`exec` 永不提权
 
-**如实声明的边界**：防密码意外进入上下文/日志/备份，不防已提权的恶意软件与恶意 Agent 主动编码外传；内联模式下密码在子进程运行期间可通过 `ps` 短暂可见（用 env 注入/脚本 stdin 模式规避）。完整威胁模型见 PLAN.md §2。
+**如实声明的边界**：防密码意外进入上下文/日志/备份，不防已提权的恶意软件与恶意 Agent 主动编码外传；内联模式下密码在子进程运行期间可通过 `ps` 短暂可见（用 env 注入/脚本 stdin 模式规避）。完整威胁模型：[docs/threat-model.md](docs/threat-model.md)。
 
 ## 平台支持
 
@@ -138,7 +147,7 @@ git clone git@github.com:harry7988/hpass.git && cd hpass
 
 ```bash
 dotnet build
-dotnet test          # 86 个测试：单元（加密/vault/占位符/脱敏/执行引擎）+ 集成（CLI 全链路）
+dotnet test          # 100 个测试：单元（加密/vault/占位符/脱敏/执行引擎/加固）+ 集成（CLI 全链路）
 dotnet publish src/HPass.Cli -c Release -r osx-arm64 /p:PublishAot=true -o publish
 ```
 
