@@ -343,9 +343,11 @@ public sealed class Vault : IDisposable
                     // sudo 运行会把 lock 留在 root 名下——立即归还调用用户，避免后续用户态命令永久 EACCES
                     if (Hardening.IsRoot())
                     {
-                        var sudoUser = Environment.GetEnvironmentVariable("SUDO_USER");
-                        if (!string.IsNullOrEmpty(sudoUser))
-                            _ = Hardening.Sh($"chown {Hardening.Q(sudoUser)} {Hardening.Q(path)} 2>/dev/null || true");
+                        // -h（lchown）：即使窗口内被换成符号链接也只作用于链接本体，绝不转移任意文件属主；
+                        // O_NOFOLLOW 已保证我们锁定的不是链接，此处为纵深防御
+                        var sudoUser = Hardening.RealSudoUser();
+                        if (sudoUser is not null)
+                            _ = Hardening.Sh($"chown -h {Hardening.Q(sudoUser)} {Hardening.Q(path)} 2>/dev/null || true");
                     }
                     return new FileLock(null, handle);
                 }

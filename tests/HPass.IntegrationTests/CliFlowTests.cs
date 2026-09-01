@@ -591,6 +591,42 @@ public class CliFlowTests
     }
 
     [Fact]
+    public void WriteCommand_SymlinkedLock_Refused_NoPrivilegedChown()
+    {
+        if (!Unix) return;
+        var home = Path.Combine(Path.GetTempPath(), "hpass-it-symlock-" + Guid.NewGuid().ToString("N"));
+        var target = Path.Combine(Path.GetTempPath(), "hpass-symtarget-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            Environment.SetEnvironmentVariable("HPASS_PASSPHRASE", "init-pass-123");
+            Assert.Equal(0, F.RunIn(home, null, "init", "--no-harden").Exit);
+            Environment.SetEnvironmentVariable("HPASS_PASSPHRASE", null);
+            File.WriteAllText(target, "critical-content");
+
+            // 恶意进程把 run/lock 换成指向敏感文件的符号链接：任何写命令必须干净拒绝，
+            // 绝不能让（潜在的 root）属主归还落在链接上（O_NOFOLLOW + lchown 双防）
+            var lockPath = Path.Combine(home, "run", "lock");
+            File.Delete(lockPath);
+            File.CreateSymbolicLink(lockPath, target);
+
+            Environment.SetEnvironmentVariable("HPASS_PASSPHRASE", "init-pass-123");
+            var (exit, _, stderr) = F.RunIn(home, "Sym-Pass-91", "set", "x", "--password-stdin");
+            Assert.Equal(ExitCodes.Vault, exit);
+            Assert.Contains("符号链接", stderr);
+            Assert.Equal("critical-content", File.ReadAllText(target));   // 目标内容/状态未被波及
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("HPASS_PASSPHRASE", null);
+            try { File.Delete(Path.Combine(home, "run", "lock")); } catch { }
+            Hardening.ClearImmutable(Path.Combine(home, "vault.json"));
+            Hardening.ClearImmutable(Path.Combine(home, "master.key"));
+            try { Directory.Delete(home, true); } catch { }
+            File.Delete(target);
+        }
+    }
+
+    [Fact]
     public void Exec_EnvReservedVariable_Rejected()
     {
         if (!Unix) return;

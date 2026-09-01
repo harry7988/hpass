@@ -284,17 +284,20 @@ public static class Commands
         }
 
         // Linux 普通用户：chattr 需提权
-        if (ctx.Interactive)
+        if (ctx.Interactive && !Console.IsInputRedirected)
         {
-            ctx.OutText.WriteLine("将以 sudo 重新执行加固（root 属主 + chattr +i）…");
             var exe = Environment.ProcessPath
                 ?? throw new VaultException("无法定位 hpass 可执行文件");
-            if (!Hardening.IsTrustedBinaryPath(exe))
+            // 交互输密码的 sudo 一律用严格信任档（二进制+目录链全 root 属主）：
+            // 用户属主路径（~/.local/bin 等）下同 UID 替换木马会借"例行加固提示"获得密码认证过的 root 执行
+            if (!Hardening.IsTrustedBinaryPath(exe, requireRootOwner: true))
             {
-                ctx.ErrText.WriteLine($"hpass: 二进制位于不受信任路径（{exe}），不自动提权。请手动执行：sudo hpass --home {Hardening.Q(ctx.Home)} harden");
+                ctx.ErrText.WriteLine($"hpass: 二进制位于不受信任路径（{exe}，用户可写位置），不自动提权。请手动执行：sudo hpass --home {Hardening.Q(ctx.Home)} harden（请亲眼核对 sudo 目标）");
                 return ExitCodes.Vault;
             }
-            var (code, _) = Hardening.RunCapture("sudo", ["--", exe, "--home", ctx.Home, "harden"], showOutput: true, timeoutMs: 300_000);
+            ctx.OutText.WriteLine("将以 sudo 重新执行加固（root 属主 + chattr +i）…");
+            Console.Error.WriteLine("hpass: 即将请求 sudo 密码执行加固（目标为上述 vault 目录）");
+            var (code, _, _) = Hardening.RunCaptureEx("sudo", ["--", exe, "--home", ctx.Home, "harden"], timeoutMs: 300_000);
             return code == 0 ? ExitCodes.Ok : ExitCodes.Vault;
         }
         ctx.OutText.WriteLine($"非交互环境（Linux 普通用户无法 chattr）：请手动运行 sudo hpass --home {Hardening.Q(ctx.Home)} harden");
@@ -347,10 +350,15 @@ public static class Commands
                 if (owner >= 0 && caller >= 0 && owner != caller)
                     throw new UsageException($"安全限制：暂存文件属主（uid {owner}）与调用用户（uid {caller}）不一致，拒绝安装");
             }
-            // root 首次创建的 lock 若留在 root 名下，用户侧从此 EACCES——归还给调用用户
+            // root 首次创建的 lock 若留在 root 名下，用户侧从此 EACCES——归还给调用用户。
+            // -h（lchown）+ 链接拒绝：锁路径被换成符号链接时绝不把特权 chown 作用到任意文件（提权原语）
             var lockPath = Path.Combine(ctx.Home, "run", "lock");
             if (File.Exists(lockPath) && !string.IsNullOrEmpty(sudoUser))
-                _ = Hardening.Sh($"chown {Hardening.Q(sudoUser)} {Hardening.Q(lockPath)} 2>/dev/null || true");
+            {
+                if (Hardening.IsSymbolicLink(lockPath))
+                    throw new VaultException($"run/lock 是符号链接（可能的攻击），拒绝执行：{lockPath}");
+                _ = Hardening.Sh($"chown -h {Hardening.Q(sudoUser)} {Hardening.Q(lockPath)} 2>/dev/null || true");
+            }
         }
         SecureFile.InstallStagedDirect(staging, final);
         return ExitCodes.Ok;
@@ -363,8 +371,9 @@ public static class Commands
         var ok = true;
 
         // 安装残留报告：必须在 Vault.Exists 判断之外——"final 缺失、orig 是旧库唯一副本"的恢复场景恰在此
-        foreach (var pattern in new[] { "*.hpass-orig-*", "*.hpass-new-*" })
-            foreach (var f in Directory.EnumerateFiles(ctx.Home, pattern))
+        if (Directory.Exists(ctx.Home))
+            foreach (var pattern in new[] { "*.hpass-orig-*", "*.hpass-new-*" })
+                foreach (var f in Directory.EnumerateFiles(ctx.Home, pattern))
                 ctx.OutText.WriteLine($"安装残留 : {Path.GetFileName(f)}（特权安装被中断的产物；orig 为旧库唯一副本，可用 sudo 手动改名恢复，切勿先 init 覆盖）");
 
         // 中断检测与恢复（I6 / §5.1）：清理残留暂存（仅密文，可安全删除）。

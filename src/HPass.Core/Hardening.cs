@@ -35,13 +35,15 @@ public static class Hardening
     private static extern int open(string path, int flags);
 
     /// <summary>
-    /// 裸 open(O_RDWR)：不经 .NET 的共享模拟（其把写访问变为排他 fcntl，并发 open 即冲突）。
+    /// 裸 open(O_RDWR|O_NOFOLLOW)：不经 .NET 的共享模拟（其把写访问变为排他 fcntl，并发 open 即冲突），
+    /// 且绝不跟随符号链接——root 侧后续的属主归还/加锁若落在链接上会把特权操作重定向到任意文件（提权）。
     /// 文件由 .NET 预创建并收紧 600——libc 的 open 是变参函数，mode 参数经默认 P/Invoke 传参
-    /// 在 arm64 macOS 上会丢失/错乱（实测），因此只做两参数调用。
+    /// 在 arm64 macOS 上会丢失/错乱（实测），因此只做两参数调用（无 O_CREAT，无需 mode）。
     /// </summary>
     public static Microsoft.Win32.SafeHandles.SafeFileHandle OpenLockFile(string path)
     {
         const int oRdwr = 2;
+        var oNoFollow = OperatingSystem.IsMacOS() ? 0x0100 : 0x40000;   // 平台常量不同（实测 macOS=0x100，Python os.O_NOFOLLOW 对照验证）
         if (!File.Exists(path))
         {
             try { using var _ = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.ReadWrite); }
@@ -49,9 +51,14 @@ public static class Hardening
             try { File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite); }
             catch { }
         }
-        var fd = open(path, oRdwr);
+        var fd = open(path, oRdwr | oNoFollow);
         if (fd < 0)
-            throw new IOException($"无法打开锁文件 {path}（errno {System.Runtime.InteropServices.Marshal.GetLastWin32Error()}）");
+        {
+            var errno = System.Runtime.InteropServices.Marshal.GetLastWin32Error();
+            if (Hardening.IsSymbolicLink(path))
+                throw new VaultException($"run/lock 是符号链接（可能的攻击或残留）：请检查并删除 {path} 后重试");
+            throw new IOException($"无法打开锁文件 {path}（errno {errno}）。若为 sudo 运行遗留的属主异常，可删除该文件后重试");
+        }
         return new Microsoft.Win32.SafeHandles.SafeFileHandle((IntPtr)fd, ownsHandle: true);
     }
 
@@ -174,7 +181,10 @@ public static class Hardening
             return true;
         }
         if (OperatingSystem.IsLinux())
-            return Sh($"chattr +i {Q(path)} 2>/dev/null || true").Length >= 0 && LastShellExit == 0;
+        {
+            _ = Sh($"chattr +i {Q(path)} 2>/dev/null");
+            return LastShellExit == 0;   // 文件系统不支持 chattr（overlayfs 等）→ false，调用方降级
+        }
         return false;
     }
 

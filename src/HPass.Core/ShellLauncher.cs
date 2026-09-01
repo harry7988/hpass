@@ -149,7 +149,7 @@ public static class ShellLauncher
         var shellName = ShellNameOf(shell);
         if (shell == "none")
         {
-            psi.FileName = resolved[0];
+            psi.FileName = ResolveCommandName(resolved[0]);
             foreach (var a in resolved.Skip(1)) psi.ArgumentList.Add(a);
         }
         else if (shellName is "cmd" or "cmd.exe")
@@ -157,7 +157,7 @@ public static class ShellLauncher
             // cmd 的引号规则与 MSVCRT 不同：直接拼 raw 命令串交给 /c，不做参数级加引号
             psi.FileName = shell;
             psi.ArgumentList.Add("/c");
-            psi.ArgumentList.Add(string.Join(' ', resolved));
+            psi.ArgumentList.Add(string.Join(' ', resolved.Select((a, i) => i == 0 ? ResolveCommandName(a) : a)));
         }
         else if (shellName is "pwsh" or "pwsh.exe" or "powershell" or "powershell.exe")
         {
@@ -177,6 +177,18 @@ public static class ShellLauncher
             psi.ArgumentList.Add(string.Join(' ', resolved.Select(QuoteForPosix)));
         }
         return StartAndWait(psi, req, stdoutSink, stderrSink, stdinText: null);
+    }
+
+    /// <summary>
+    /// Windows 上裸命令名按"父目录→CWD→System32→PATH"解析（CreateProcessW 语义），预植可执行文件
+    /// 能收割以密文为 argv 的进程——统一解析为 PATH 上的绝对路径，拒绝相对/CWD 命中。Unix 的
+    /// execvp 走 PATH（不搜 CWD），保持原样。
+    /// </summary>
+    private static string ResolveCommandName(string command)
+    {
+        if (!OperatingSystem.IsWindows() || Path.IsPathRooted(command)) return command;
+        return FindOnPath(command)
+            ?? throw new UsageException($"命令未在 PATH 中找到（拒绝当前目录命中，防可执行文件种植）：{command}");
     }
 
     /// <summary>Windows 文件系统大小写不敏感：统一小写匹配，避免 --shell PowerShell/CMD 落入错误分支。</summary>
