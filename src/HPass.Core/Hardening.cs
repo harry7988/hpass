@@ -238,6 +238,37 @@ public static class Hardening
         return output;
     }
 
+    /// <summary>同 RunCapture，但额外捕获 stderr（用于把提权子进程的失败原因带回给调用方）。</summary>
+    public static (int Exit, string Output, string Stderr) RunCaptureEx(string fileName, IReadOnlyList<string> args, int timeoutMs = 10_000, Action<ProcessStartInfo>? configure = null)
+    {
+        var psi = new ProcessStartInfo(fileName) { UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true };
+        foreach (var a in args) psi.ArgumentList.Add(a);
+        psi.Environment.Remove("HPASS_PASSPHRASE");
+        psi.Environment.Remove("HPASS_PASSPHRASE_FILE");
+        configure?.Invoke(psi);
+        try
+        {
+            using var p = Process.Start(psi)!;
+            var outTask = p.StandardOutput.ReadToEndAsync();
+            var errTask = p.StandardError.ReadToEndAsync();
+            if (!p.WaitForExit(timeoutMs))
+            {
+                try { p.Kill(entireProcessTree: true); } catch { }
+                p.WaitForExit(2_000);
+                outTask.Wait(2_000);
+                errTask.Wait(2_000);
+                return (-1, "", errTask.IsCompleted ? errTask.Result : "");
+            }
+            outTask.Wait(5_000);
+            errTask.Wait(5_000);
+            return (p.HasExited ? p.ExitCode : -1, outTask.IsCompleted ? outTask.Result : "", errTask.IsCompleted ? errTask.Result : "");
+        }
+        catch (Exception e)
+        {
+            return (-1, "", e.Message);
+        }
+    }
+
     public static (int Exit, string Output) RunCapture(string fileName, IReadOnlyList<string> args, bool showOutput = false, int timeoutMs = 10_000, Action<ProcessStartInfo>? configure = null)
     {
         var psi = new ProcessStartInfo(fileName) { UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = showOutput ? false : true };

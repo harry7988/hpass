@@ -244,16 +244,18 @@ public static class SecureFile
         // 1) 免密 sudo（CI / 自动化），只搬运密文。子进程带 HPASS_CHILD_INSTALL 标记：
         //    写锁由父进程持有（临界区保护不变），子进程跳过重复获取以免自锁
         var args = new List<string> { "--home", home, "_install-staged", stagingPath, finalPath };
-        var (code, _) = Hardening.RunCapture("sudo", ["-n", "--", exe, .. args],
+        var (code, _, err1) = Hardening.RunCaptureEx("sudo", ["-n", "--", exe, .. args],
             configure: psi => psi.Environment["HPASS_CHILD_INSTALL"] = "1");
         if (code == 0) return;
         // 2) 交互终端：sudo 自行提示密码（写入 /dev/tty，不经 argv）；用户输密码可能远超 10s，放宽超时
         if (!Console.IsInputRedirected)
         {
-            var (code2, _) = Hardening.RunCapture("sudo", ["--", exe, .. args], showOutput: true, timeoutMs: 300_000,
+            var (code2, _, _) = Hardening.RunCapture("sudo", ["--", exe, .. args], showOutput: true, timeoutMs: 300_000,
                 configure: psi => psi.Environment["HPASS_CHILD_INSTALL"] = "1");
             if (code2 == 0) return;
         }
-        throw new NeedsElevationException(stagingPath, finalPath, hint);
+        // 提权子进程的失败原因（固定文案，不含密文）带回给用户定位
+        var childErr = err1.Length > 0 ? "；提权子进程输出：" + (err1.Length > 300 ? err1[..300] : err1).Trim() : "";
+        throw new NeedsElevationException(stagingPath, finalPath, hint + childErr);
     }
 }
