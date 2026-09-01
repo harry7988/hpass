@@ -215,9 +215,10 @@ AI 工具 (Claude Code / Cursor / …)                 人（一次性录入）
 - `--shell auto|bash|sh|pwsh|cmd|none`（默认 auto：Unix 下 `$SHELL`→bash→sh；Windows 下 pwsh→powershell→cmd；`none` 表示不经 shell 直接 spawn，最安全）
 - `--env NAME:ENVVAR`（可重复，如 `--env db:MYSQL_PWD`）
 - `--timeout <秒>`（默认 120）
+- `--ph #|@`（占位符定界符：默认 `{{name}}`；`--ph '#'` → `#name#`，`--ph '@'` → `@name@`。用于规避 {{ 与 Helm/Jinja/Go template 等模板语法的转义冲突。白名单仅 #/@；#name# 在脚本中与 `#` 注释行天然区分（名字字符集不含空格），脚本内注释密集时建议 @。切换语法后 I2/I3/I5 语义不变：输出脱敏与错误信息均按当前语法渲染）
 - `--no-redact`（人类调试用，输出警告，文档不做重点宣传）
 
-**占位符语法**：`{{name}}` = 密码；`{{name.user}}` = 账号；`{{name.tenant}}` = 租户；`{{name.<字段名>}}` = 自定义字段值（解密后填充）。`user`/`tenant` 为保留字段名。解析规则：名内字符集外的内容不匹配，避免误伤模板字符串。
+**占位符语法**（默认）：`{{name}}` = 密码；`{{name.user}}` = 账号；`{{name.tenant}}` = 租户；`{{name.<字段名>}}` = 自定义字段值（解密后填充）。`user`/`tenant` 为保留字段名。解析规则：名内字符集外的内容不匹配，避免误伤模板字符串。`--ph` 切换定界符后仅识别当前语法（`#name#` 模式下 `{{name}}` 是字面量，反之亦然），Extract/Replace/脱敏渲染/EchoProbe 共用同一语法对象。
 
 **退出码**：`0` 成功（透传子进程退出码）；`2` 用法错误；`3` vault/密钥/口令错误；`4` 未知占位符；`124` 超时。
 

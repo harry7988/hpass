@@ -55,6 +55,17 @@ pwhide exec -- mysql -u {{db-local.user}} -p{{db-local}} -e "SELECT 1"
 
 常用选项：`--shell auto|bash|sh|pwsh|cmd|none`、`--env NAME:VAR`（可重复）、`--timeout 秒`（默认 120）。
 
+### 与模板语法冲突时：切换占位符定界符
+
+要编辑/执行的文件本身使用 `{{ }}` 模板语法（Helm、Jinja2、Go text/template、Ansible 等）时，给 exec 加 `--ph`，占位符改写为 `#条目名#`（或 `@条目名@`）：
+
+```bash
+pwhide exec --ph '#' -- envsubst < helm-values.yaml   # 此时 {{db}} 是模板字面量，#db# 才是凭据占位符
+pwhide exec --ph '@' -f deploy.sh --shell auto         # 脚本内注释密集时用 @（# 与注释行易混淆）
+```
+
+规则：`--ph` 生效时**只**识别当前定界符（`{{db}}` 是字面量，反之亦然）；脱敏输出与错误信息也按当前定界符渲染（如输出中的 `#db#` 即脱敏标记）。字段语法不变：`#条目名.user#`、`@条目名.字段名@`。
+
 ## 凭据不存在时（退出码 4）
 
 请用户**本人**运行录入命令，密码由隐藏输入提供：

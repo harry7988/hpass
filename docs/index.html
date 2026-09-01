@@ -316,7 +316,7 @@ footer a:hover{color:var(--acc)}
       <div class="card glass b3"><h3>特权加固</h3><p>root 属主 + 不可变标志，vault 只能整体覆盖；提权安装只搬运密文，且经符号链接、属主、inode 三重校验，三类真实攻击经 Docker 环境对抗验证。</p></div>
       <div class="card glass b4"><h3>三种执行模式</h3><p>脚本 stdin（推荐，密码不进 argv 与 environ）&gt; 环境变量注入 &gt; args 内联。包装 bash / sh / pwsh / cmd 四种 shell。</p></div>
       <div class="card glass b5"><h3>扩展条目模型</h3><p>账号类型、账号、密码、租户、自定义字段。元数据可查（AI 组装命令用），密码与字段值不可查，<code>list --json</code> 是 AI 的主查询接口。</p></div>
-      <div class="card glass b6"><h3>工程级质量</h3><p>187 个测试（单元 + 集成），CI 三平台（含真实 sudo 的加固流程），22 轮 3-Agent 安全评审收敛，六平台 Native AOT 产物附 SHA256 校验和。</p></div>
+      <div class="card glass b6"><h3>工程级质量</h3><p>214 个测试（单元 + 集成），CI 三平台（含真实 sudo 的加固流程），22 轮 3-Agent 安全评审收敛，六平台 Native AOT 产物附 SHA256 校验和。</p></div>
     </div>
   </div>
 </section>
@@ -348,7 +348,7 @@ pwhide exec --env db:MYSQL_PWD -- mysql -u {{db.user}} -e "SELECT 1"</div>
     <p class="lead">从录入到 AI 日常使用的完整路径。</p>
     <div class="steps">
       <div class="step"><div class="n">01</div><div><h3>录入凭据</h3><p><code>set</code> 交互式隐藏输入；<code>-f 字段=值</code> 添加自定义字段（api_key 等敏感字段用 <code>-f 字段名</code> 交互输入，避免进 shell history）；非交互场景用 <code>--password-stdin</code> 管道传入。弱密码会被直接拒绝。</p></div></div>
-      <div class="step"><div class="n">02</div><div><h3>了解占位符语法</h3><p><code>{{db}}</code> 密码、<code>{{db.user}}</code> 账号、<code>{{db.tenant}}</code> 租户、<code>{{db.字段名}}</code> 自定义字段值。条目名可用 <code>list</code> 查到，密码没有查询接口。</p></div></div>
+      <div class="step"><div class="n">02</div><div><h3>了解占位符语法</h3><p><code>{{db}}</code> 密码、<code>{{db.user}}</code> 账号、<code>{{db.tenant}}</code> 租户、<code>{{db.字段名}}</code> 自定义字段值。条目名可用 <code>list</code> 查到，密码没有查询接口。与 Helm / Jinja 等模板的 <code>{{ }}</code> 冲突时，加 <code>--ph '#'</code> 改用 <code>#db#</code>（或 <code>--ph '@'</code> 用 <code>@db@</code>），解析与脱敏语义完全一致。</p></div></div>
       <div class="step"><div class="n">03</div><div><h3>三种执行方式按安全性递增</h3><p>args 内联最直观但 <code>ps</code> 短暂可见；<code>--env 条目:环境变量</code> 注入环境（注意 Linux 祖先进程可读 /proc）；<b>推荐脚本 stdin 模式</b>：脚本里写占位符，<code>pwhide exec -f deploy.sh</code>，替换只在内存发生，不落盘不进 argv。</p></div></div>
       <div class="step"><div class="n">04</div><div><h3>看懂退出码</h3><p>0 成功（透传子进程码）；2 用法错误或回显探测拦截；3 口令或 vault 错误、需提权；4 未知占位符（命令不会被执行）；124 超时已杀进程树。</p></div></div>
       <div class="step"><div class="n">05</div><div><h3>日常维护</h3><p><code>doctor</code> 检查保护状态并恢复中断；<code>rotate</code> 更换密钥对；口令自动化用 <code>PWHIDE_PASSPHRASE_FILE</code>（600 权限文件）。密码含 shell 元字符时 pwhide 会告警并建议改用 <code>--env</code>。</p></div></div>
@@ -398,6 +398,7 @@ pwhide exec --env db:MYSQL_PWD -- mysql -u {{db.user}} -e "SELECT 1"</div>
     <details class="glass"><summary>AI 会不会通过输出猜出密码？</summary><p>三道闸：弱密码录不进来（常见语句会被拒）；echo、printf 探测命令直接拒绝（--allow-echo 显式放行）；单条命令输出中密码出现超 32 次会告警。防的是意外泄露，恶意 Agent 主动编码外传属声明边界（见威胁模型）。</p></details>
     <details class="glass"><summary>支持 Windows 吗？</summary><p>支持（win-x64 / win-arm64 二进制，pwsh 路径全绿）。cmd 语法特殊，建议 pwsh；PowerShell 5.1 的编码陷阱已内置规避。</p></details>
     <details class="glass"><summary>忘掉主口令怎么办？</summary><p>无法恢复。没有后门，这是设计。可先 <code>list</code>（元数据不需要口令）导出清单，重新 init 录入。</p></details>
+    <details class="glass"><summary>命令或脚本里本来就有 <code>{{ }}</code> 模板语法（Helm/Jinja）怎么办？</summary><p>给 exec 加 <code>--ph '#'</code>，占位符改写成 <code>#db#</code>（或 <code>--ph '@'</code> 用 <code>@db@</code>）。此时 <code>{{db}}</code> 是字面量，只有 <code>#db#</code> 会被解析；输出脱敏与错误信息也按当前定界符渲染，安全语义与大括号模式完全一致。</p></details>
     <details class="glass"><summary>费用与许可？</summary><p>MIT 开源，免费。二进制从 GitHub Releases 获取，附 SHA256 校验和。</p></details>
   </div>
 </section>

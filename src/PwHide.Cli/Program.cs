@@ -112,6 +112,7 @@ public static class CliRunner
 
             exec 选项：--shell auto|bash|sh|pwsh|cmd|none  --env 条目:环境变量(可重复)
                        --timeout 秒(默认120)  --allow-echo(放行回显探测拦截)  --home <目录>
+                       --ph #|@（占位符定界符，默认 {{name}}；脚本中 # 与注释冲突时用 @）
             环境变量：PWHIDE_HOME / PWHIDE_PASSPHRASE / PWHIDE_PASSPHRASE_FILE
             """);
         return ExitCodes.Usage;

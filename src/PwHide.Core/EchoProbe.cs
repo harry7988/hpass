@@ -24,18 +24,18 @@ public static partial class EchoProbe
     [GeneratedRegex(@"\becho\b[.:=]", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex EchoCmdVariantRegex();
 
-    [GeneratedRegex(@"\{\{([A-Za-z0-9_.\-]+)\}\}")]
-    private static partial Regex SecretTokenRegex();
-
     /// <summary>文本中是否存在回显原语（与密文引用无关的独立判定，供 --env 场景组合使用）。</summary>
     public static bool HasEchoPrimitive(string text) => EchoRegex().IsMatch(text) || EchoCmdVariantRegex().IsMatch(text);
 
     /// <summary>同一文本中"回显原语"与"密文占位符"共现即判定为探测。命中返回 true，out 参数为首个密文占位符。</summary>
-    public static bool IsProbe(string text, out string token)
+    public static bool IsProbe(string text, out string token) => IsProbe(text, TokenSyntax.Braces, out token);
+
+    /// <summary>同上，按 exec --ph 指定语法匹配（#name# / @name@ 时，大括号字面量不再视为密文引用）。</summary>
+    public static bool IsProbe(string text, TokenSyntax syntax, out string token)
     {
         token = "";
         if (!HasEchoPrimitive(text)) return false;   // 与生产门同源（含 cmd echo./echo: 变体），消除语义分叉
-        foreach (Match m in SecretTokenRegex().Matches(text))
+        foreach (Match m in syntax.NewRegex().Matches(text))
         {
             var body = m.Groups[1].Value;
             var dot = body.IndexOf('.');

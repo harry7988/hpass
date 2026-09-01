@@ -59,6 +59,31 @@ public class EchoProbeTests
         Assert.Contains("--allow-echo", EchoProbe.DenyMessage("{{db}}"));
         Assert.Contains("{{db}}", EchoProbe.DenyMessage("{{db}}"));
     }
+
+    // ---------- --ph 自定义定界符下的探测语义 ----------
+
+    [Theory]
+    [InlineData("#", "echo #db#")]
+    [InlineData("#", "echo pw=#db#")]
+    [InlineData("#", "printf '%s' #db.host#")]
+    [InlineData("@", "echo @db@")]
+    [InlineData("@", "Write-Output \"pw=@db@\"")]
+    public void CustomSyntax_EchoWithSecret_Detected(string symbol, string command)
+    {
+        Assert.True(EchoProbe.IsProbe(command, TokenSyntax.Parse(symbol), out var token), $"应检出：{command}");
+        Assert.Equal(symbol, token[..1]);
+    }
+
+    [Theory]
+    [InlineData("#", "echo {{db}}")]          // 自定义语法下大括号是字面量，不构成密文引用
+    [InlineData("@", "echo {{db}}")]
+    [InlineData("#", "echo #db.user#")]       // 明文字段不拦
+    [InlineData("#", "mysql -p#db# -e 'select 1'")] // 有密文引用但无回显原语
+    [InlineData("#", "echo-backup #db#")]     // 文件名不误伤
+    public void CustomSyntax_CleanCommands_NotFlagged(string symbol, string command)
+    {
+        Assert.False(EchoProbe.IsProbe(command, TokenSyntax.Parse(symbol), out _), $"不应误报：{command}");
+    }
 }
 
 public class RedactorCountTests

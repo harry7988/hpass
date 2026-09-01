@@ -20,11 +20,13 @@ public class ShellLauncherTests : IDisposable
         return (result.ExitCode, Encoding.UTF8.GetString(stdout.ToArray()) + Encoding.UTF8.GetString(stderr.ToArray()));
     }
 
-    private static Dictionary<string, string> BuildValues(string text)
+    private static Dictionary<string, string> BuildValues(string text) => BuildValues(text, TokenSyntax.Braces);
+
+    private static Dictionary<string, string> BuildValues(string text, TokenSyntax syntax)
     {
         var values = new Dictionary<string, string>();
-        foreach (var r in Placeholder.Extract(text))
-            values[r.Token] = r.Field is null ? "resolved-" + r.Entry : "resolved-" + r.Entry + "-" + r.Field;
+        foreach (var r in Placeholder.Extract(text, syntax))
+            values[syntax.Render(r.Entry, r.Field)] = r.Field is null ? "resolved-" + r.Entry : "resolved-" + r.Entry + "-" + r.Field;
         return values;
     }
 
@@ -83,6 +85,46 @@ public class ShellLauncherTests : IDisposable
         var (exit, output) = Run(Cmd(["/bin/echo", "{{db}}"]));
         Assert.Equal(0, exit);
         Assert.Equal("{{db}}\n", output);
+    }
+
+    [Fact]
+    public void InlineMode_HashSyntax_ResolvedAndRedacted()
+    {
+        if (!Unix) return;
+        var hash = TokenSyntax.Parse("#");
+        var req = FromValues(BuildValues("/bin/echo #db#", hash)) with
+        {
+            Args = ["/bin/echo", "#db#"],
+            Shell = "none",
+            Syntax = hash,
+            TimeoutSeconds = 30,
+        };
+        var (exit, output) = Run(req);
+        Assert.Equal(0, exit);
+        Assert.Equal("#db#\n", output);
+    }
+
+    [Fact]
+    public void ScriptMode_AtSyntax_ResolvedInMemory()
+    {
+        if (!Unix) return;
+        var at = TokenSyntax.Parse("@");
+        var script = Path.Combine(_tmp, "at.sh");
+        File.WriteAllText(script, "#!/bin/sh\necho pw=@db@\n");
+        var text = File.ReadAllText(script);
+        var req = FromValues(BuildValues(text, at)) with
+        {
+            Args = [],
+            ScriptPath = script,
+            ScriptText = text,
+            Shell = "bash",
+            Syntax = at,
+            TimeoutSeconds = 30,
+        };
+        var (exit, output) = Run(req);
+        Assert.Equal(0, exit);
+        Assert.Equal("pw=@db@\n", output);
+        Assert.Contains("@db@", File.ReadAllText(script));   // 脚本文件本身保持占位符
     }
 
     [Fact]

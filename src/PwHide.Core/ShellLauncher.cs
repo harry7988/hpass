@@ -17,6 +17,8 @@ public sealed record ExecRequest
     /// <summary>环境变量注入：VAR → 密文值（如 db → MYSQL_PWD）。</summary>
     public IReadOnlyDictionary<string, string> EnvInject { get; init; } = new Dictionary<string, string>();
     public int TimeoutSeconds { get; init; } = 120;
+    /// <summary>占位符语法（默认 {{name}}；--ph 可切换 #name# / @name@）。Extract/Replace/脱敏渲染共用。</summary>
+    public TokenSyntax Syntax { get; init; } = TokenSyntax.Braces;
     /// <summary>占位符解析（未知条目抛 PlaceholderException）。绝不能直接回显解析结果。</summary>
     public Func<string, string> Resolve { get; init; } = _ => throw new UsageException("no resolver");
     /// <summary>脱敏规则：secret → token。</summary>
@@ -112,7 +114,7 @@ public static class ShellLauncher
             var isPwshScript = scriptShellName is "pwsh" or "pwsh.exe" or "powershell" or "powershell.exe";
             if (shell != "none" && !isPwshScript && scriptShellName is not "cmd" and not "cmd.exe")
                 script = script.Replace("\r\n", "\n");   // Windows 编辑的 CRLF 会让 POSIX shell 把 \r 带进词法
-            script = Placeholder.Replace(script, BuildTokenMap(req, script));
+            script = Placeholder.Replace(script, BuildTokenMap(req, script), req.Syntax);
             switch (scriptShellName)
             {
                 case "none":
@@ -146,7 +148,7 @@ public static class ShellLauncher
         }
 
         // 命令模式
-        var resolved = req.Args.Select(a => Placeholder.Replace(a, BuildTokenMap(req, a))).ToArray();
+        var resolved = req.Args.Select(a => Placeholder.Replace(a, BuildTokenMap(req, a), req.Syntax)).ToArray();
         if (resolved.Length == 0)
             throw new UsageException("缺少要执行的命令（pwhide exec [-- 参数…] 或 -f 脚本）");
 
@@ -208,9 +210,9 @@ public static class ShellLauncher
     private static Dictionary<string, string> BuildTokenMap(ExecRequest req, string text)
     {
         var map = new Dictionary<string, string>();
-        foreach (var r in Placeholder.Extract(text))
+        foreach (var r in Placeholder.Extract(text, req.Syntax))
         {
-            var token = r.Token;
+            var token = req.Syntax.Render(r.Entry, r.Field);
             if (!map.ContainsKey(token))
                 map[token] = req.Resolve(token);
         }

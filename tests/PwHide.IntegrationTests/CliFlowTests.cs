@@ -198,6 +198,84 @@ public class CliFlowTests
         Assert.Equal("{{db}}", stdout);
     }
 
+    // ---------- --ph 自定义占位符定界符（#name# / @name@，规避 {{ 模板语法冲突） ----------
+
+    [Fact]
+    public void Exec_PhHash_ResolvesAndRedacts()
+    {
+        if (!Unix) return;
+        var (exit, stdout, _) = F.RunAs("init-pass-123", "exec", "--ph", "#", "--allow-echo", "--",
+            "/bin/sh", "-c", "echo pw=#db#");
+        Assert.Equal(0, exit);
+        Assert.Equal("pw=#db#\n", stdout);
+    }
+
+    [Fact]
+    public void Exec_PhHash_BraceLiteralsArePlainText()
+    {
+        if (!Unix) return;
+        // --ph # 下 {{db}} 是字面量：不解析、不脱敏、原样输出（Helm/Jinja 模板不再冲突）
+        var (exit, stdout, _) = F.RunAs("init-pass-123", "exec", "--ph", "#", "--",
+            "/bin/sh", "-c", "echo template={{db}}");
+        Assert.Equal(0, exit);
+        Assert.Equal("template={{db}}\n", stdout);
+    }
+
+    [Fact]
+    public void Exec_PhHash_UnknownPlaceholder_Exit4WithHashToken()
+    {
+        if (!Unix) return;
+        var (exit, _, stderr) = F.RunAs("init-pass-123", "exec", "--ph", "#", "--", "/bin/echo", "#nope#");
+        Assert.Equal(ExitCodes.UnknownPlaceholder, exit);
+        Assert.Contains("#nope#", stderr);
+        Assert.DoesNotContain(CliFixture.DbPassword, stderr);
+    }
+
+    [Fact]
+    public void Exec_PhHash_EchoProbeStillEnforced()
+    {
+        if (!Unix) return;
+        var (exit, _, stderr) = F.RunAs("init-pass-123", "exec", "--ph", "#", "--", "/bin/echo", "#db#");
+        Assert.Equal(ExitCodes.Usage, exit);
+        Assert.Contains("--allow-echo", stderr);
+        Assert.Contains("#db#", stderr);
+    }
+
+    [Fact]
+    public void Exec_PhHash_EnvInjection_RedactsToHashToken()
+    {
+        if (!Unix) return;
+        var (exit, stdout, _) = F.RunAs("init-pass-123", "exec", "--ph", "#", "--allow-echo", "--env", "db:PWHIDE_IT_V", "--",
+            "/bin/sh", "-c", "printf '%s' \"$PWHIDE_IT_V\"");
+        Assert.Equal(0, exit);
+        Assert.Equal("#db#", stdout);
+    }
+
+    [Fact]
+    public void Exec_PhAt_ScriptMode_FieldAndSecret()
+    {
+        if (!Unix) return;
+        var script = Path.Combine(Path.GetTempPath(), "pwhide-ph-" + Guid.NewGuid().ToString("N") + ".sh");
+        File.WriteAllText(script, "#!/bin/sh\necho pw=@db@ user=@db.user@\n");
+        try
+        {
+            var (exit, stdout, _) = F.RunAs("init-pass-123", "exec", "--ph", "@", "--allow-echo", "-f", script, "--shell", "sh");
+            Assert.Equal(0, exit);
+            Assert.Equal("pw=@db@ user=root\n", stdout);
+            Assert.Contains("@db@", File.ReadAllText(script));   // 脚本文件保持占位符（替换只在内存）
+        }
+        finally { File.Delete(script); }
+    }
+
+    [Fact]
+    public void Exec_PhInvalidSymbol_UsageError()
+    {
+        if (!Unix) return;
+        var (exit, _, stderr) = F.Run("exec", "--ph", "%", "--", "/bin/echo", "x");
+        Assert.Equal(ExitCodes.Usage, exit);
+        Assert.Contains("--ph", stderr);
+    }
+
     [Fact]
     public void Exec_ScriptMode_RedactsAndLeavesFileUntouched()
     {

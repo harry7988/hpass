@@ -2,7 +2,7 @@
 
 > 面向 AI 编程工具的本地密码代填 CLI —— AI 只看到占位符和执行结果，密码永远不进入对话上下文。
 
-**状态：v0.1.2 已实现** —— 187 个测试全部通过（120 单元 + 67 集成），CI 三平台（macOS / Ubuntu / Windows）构建测试 + Native AOT 冒烟（含真实 sudo 的管理员级加固流程）全绿；威胁模型见 [docs/threat-model.md](docs/threat-model.md)，里程碑状态见 [PLAN.md](PLAN.md)。
+**状态：v0.2.0 已实现** —— 214 个测试全部通过（140 单元 + 74 集成），CI 三平台（macOS / Ubuntu / Windows）构建测试 + Native AOT 冒烟（含真实 sudo 的管理员级加固流程）全绿；威胁模型见 [docs/threat-model.md](docs/threat-model.md)，里程碑状态见 [PLAN.md](PLAN.md)。
 
 ## 为什么需要 pwhide
 
@@ -19,6 +19,7 @@ AI 收到：mysql: [输出] ...（若输出中出现密码，已被替换为 {{d
 ## 核心特性
 
 - **零上下文泄露**：没有任何查看密码的命令；子进程输出流式脱敏后才返回。
+- **可切换占位符定界符**：默认 `{{name}}`；`exec --ph '#'` 切换为 `#name#`（`--ph '@'` → `@name@`），规避与 Helm/Jinja/Go template 等模板语法的 `{{` 转义冲突。切换后解析、脱敏、回显探测语义完全一致。
 - **弱密码与探测防护**：录入时拦截"密码=常见语句"（会误替换日志、且替换位置会暴露密码内容，`--force-weak` 可覆盖）；`exec` 拒绝回显探测命令（echo/printf 与占位符在同一次调用中共现，`--allow-echo` 放行）；单次输出替换超过 32 次会告警提示换强密码。
 - **三种执行模式**（安全性递增）：args 内联（兼容）→ 环境变量注入（`ps` 不可见，但 Linux 祖先进程可经 /proc/<pid>/environ 读到）→ 脚本 stdin（推荐：唯一同时避开 argv 与 environ 的模式，不落盘不进 argv）。
 - **包装四种 shell**：bash / sh / pwsh / cmd，跨平台自动探测或显式指定。
@@ -160,7 +161,7 @@ git clone git@github.com:harry7988/pwhide.git && cd pwhide
 
 ```bash
 dotnet build
-dotnet test          # 184 个测试：单元（加密/vault/占位符/脱敏/执行引擎/加固/弱密码/探测）+ 集成（CLI 全链路）
+dotnet test          # 214 个测试：单元（加密/vault/占位符/脱敏/执行引擎/加固/弱密码/探测）+ 集成（CLI 全链路）
 dotnet publish src/PwHide.Cli -c Release -r osx-arm64 /p:PublishAot=true -o publish
 ```
 

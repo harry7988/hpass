@@ -15,7 +15,7 @@ public static partial class ExecCommand
 
     public static int Run(CliContext ctx, string[] args)
     {
-        string? shell = null, scriptPath = null, scriptText = null;
+        string? shell = null, scriptPath = null, scriptText = null, phSymbol = null;
         int? timeout = null;
         var envSpecs = new List<(string Entry, string Var)>();
         var cmd = new List<string>();
@@ -35,6 +35,10 @@ public static partial class ExecCommand
                     break;
                 case "--allow-echo":
                     allowEcho = true;
+                    break;
+                case "--ph" or "--placeholder":
+                    if (++i >= args.Length) throw new UsageException("--ph 需要 # 或 @");
+                    phSymbol = args[i];
                     break;
                 case "--timeout":
                     if (++i >= args.Length || !int.TryParse(args[i], out var t) || t <= 0)
@@ -79,6 +83,9 @@ public static partial class ExecCommand
         if (scriptPath is not null && cmd.Count > 0)
             throw new UsageException("不能同时指定 -f 脚本与命令参数（多余部分会被忽略，已拒绝）");
 
+        // 占位符语法（白名单校验在 Parse 内）：--ph '#' → #name#；--ph '@' → @name@；默认 {{name}}
+        var syntax = TokenSyntax.Parse(phSymbol);
+
         using var vault = Vault.Open(ctx.Home);
 
         // 脚本只读一次：校验/探测与执行使用同一份内容，消除"检查后文件被改写"的 TOCTOU
@@ -89,12 +96,13 @@ public static partial class ExecCommand
         var texts = new List<string>();
         if (scriptText is not null) texts.Add(scriptText);
         else texts.Add(string.Join('\n', cmd));
-        var refs = texts.SelectMany(Placeholder.Extract).GroupBy(r => r.Token).Select(g => g.First()).ToList();
+        var refs = texts.SelectMany(t => Placeholder.Extract(t, syntax))
+            .GroupBy(r => (r.Entry, r.Field)).Select(g => g.First()).ToList();
 
         // I2 预校验：条目与字段必须存在。仅查元数据、无需口令，先于解锁给出精确的退出码 4
         foreach (var (entry, field) in refs)
         {
-            var token = Vault.Token(entry, field);
+            var token = syntax.Render(entry, field);
             var e = vault.Find(entry)
                 ?? throw new PlaceholderException(token, entry, $"条目不存在：{entry}");
             if (field is null && e.Ct.Length == 0)
@@ -110,9 +118,9 @@ public static partial class ExecCommand
         {
             var e = vault.Find(envEntry);
             if (e is null)
-                throw new PlaceholderException(Vault.Token(envEntry, null), envEntry, $"条目不存在：{envEntry}");
+                throw new PlaceholderException(syntax.Render(envEntry), envEntry, $"条目不存在：{envEntry}");
             if (e.Ct.Length == 0)
-                throw new PlaceholderException(Vault.Token(envEntry, null), envEntry, $"{envEntry} 尚未设置密码");
+                throw new PlaceholderException(syntax.Render(envEntry), envEntry, $"{envEntry} 尚未设置密码");
         }
 
         // 回显探测防护（全文共现语义）：回显原语 + 密文引用共现即拒绝——组合即可做逐候选字典探测。
@@ -122,7 +130,7 @@ public static partial class ExecCommand
             var rawText = string.Join('\n', texts);
             if (EchoProbe.HasEchoPrimitive(rawText))
             {
-                var secretToken = refs.Where(r => NeedsSecret(r)).Select(r => r.Token).FirstOrDefault() ?? "{{条目}}";
+                var secretToken = refs.Where(r => NeedsSecret(r)).Select(r => syntax.Render(r.Entry, r.Field)).FirstOrDefault() ?? syntax.Render("条目");
                 throw new UsageException(EchoProbe.DenyMessage(secretToken));
             }
         }
@@ -136,7 +144,7 @@ public static partial class ExecCommand
         var redaction = new Dictionary<string, string>();
         foreach (var (entry, field) in refs)
         {
-            var token = Vault.Token(entry, field);
+            var token = syntax.Render(entry, field);
             if (tokenValues.ContainsKey(token)) continue;
             var e = vault.Find(entry)!;
             var value = field switch
@@ -157,7 +165,7 @@ public static partial class ExecCommand
             var e = vault.Find(entryName)!;
             var secret = vault.DecryptPassword(e);
             envInject[var] = secret;
-            redaction[secret] = Vault.Token(entryName, null);
+            redaction[secret] = syntax.Render(entryName);
         }
 
         // 3) 执行（脚本内容经 stdin 喂给 shell；替换只发生在内存）
@@ -169,9 +177,10 @@ public static partial class ExecCommand
             Shell = shell ?? vault.Config.DefaultShell,
             EnvInject = envInject,
             TimeoutSeconds = timeout ?? Math.Clamp(vault.Config.TimeoutSeconds, 1, 86_400),
+            Syntax = syntax,
             Resolve = token => tokenValues.TryGetValue(token, out var v)
                 ? v
-                : throw new PlaceholderException(token, token.Trim('{', '}'), "占位符未被预解析（内部错误）"),
+                : throw new PlaceholderException(token, syntax.Body(token), "占位符未被预解析（内部错误）"),
             RedactionRules = redaction,
         };
 
@@ -183,7 +192,7 @@ public static partial class ExecCommand
         {
             foreach (var (token, value) in tokenValues)
             {
-                var body = token.Trim('{', '}');
+                var body = syntax.Body(token);
                 var dot = body.IndexOf('.');
                 var entryName = dot < 0 ? body : body[..dot];
                 var fieldName = dot < 0 ? null : body[(dot + 1)..];
@@ -204,7 +213,7 @@ public static partial class ExecCommand
         foreach (var (token, count) in result.ReplacementCounts)
         {
             if (count > 32)
-                ctx.ErrText.WriteLine($"pwhide: 警告：{token} 在输出中出现 {count} 次已被脱敏——该密码疑似与常见文本碰撞（既破坏输出，也可能被据此推测），建议更换强密码：pwhide set {token.Trim('{', '}').Split('.')[0]}");
+                ctx.ErrText.WriteLine($"pwhide: 警告：{token} 在输出中出现 {count} 次已被脱敏——该密码疑似与常见文本碰撞（既破坏输出，也可能被据此推测），建议更换强密码：pwhide set {syntax.Body(token).Split('.')[0]}");
         }
         return result.ExitCode;
     }
