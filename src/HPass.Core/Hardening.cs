@@ -44,17 +44,18 @@ public static class Hardening
     [System.Runtime.InteropServices.DllImport("libc", SetLastError = true)]
     private static extern int lstat(string path, byte[] buf);
 
-    /// <summary>fd 的 (st_dev, st_ino)。</summary>
+    /// <summary>fd 的 (st_dev, st_ino)。缓冲必须 ≥ sizeof(struct stat)（Linux x64=144/arm64=128，macOS=144）——
+    /// 只读前 16 字节但内核会写满整个结构体，16 字节缓冲会造成 root 进程堆越界写（实测复现）。</summary>
     private static (long Dev, long Ino) StatFd(int fd)
     {
-        var buf = new byte[16];
+        var buf = new byte[256];
         return fstat(fd, buf) != 0 ? (-1, -1) : (BitConverter.ToInt64(buf, 0), BitConverter.ToInt64(buf, 8));
     }
 
-    /// <summary>路径的 lstat（不跟随链接）(st_dev, st_ino)。</summary>
+    /// <summary>路径的 lstat（不跟随链接）(st_dev, st_ino)。缓冲同上。</summary>
     private static (long Dev, long Ino) LStatPath(string path)
     {
-        var buf = new byte[16];
+        var buf = new byte[256];
         return lstat(path, buf) != 0 ? (-1, -1) : (BitConverter.ToInt64(buf, 0), BitConverter.ToInt64(buf, 8));
     }
 
@@ -396,9 +397,11 @@ public static class Hardening
         if (fromRealUser)
         {
             // 目录施权同样 fd 化：按路径 chown/chmod 在检查→执行窗口被换链会把任意目录过户改权（实证）。
-            // O_RDONLY 打开目录即得 dirfd（实测可用；O_DIRECTORY 常量跨平台有坑故不用）+ inode 同一性 + fchown/fchmod。
+            // O_RDONLY+O_NOFOLLOW 打开目录即得 dirfd（实测可用；O_DIRECTORY 常量跨平台有坑故不用）：
+            // macOS 上 O_NOFOLLOW 实测生效挡住链接偷换；Linux 上该 flag 被丢弃但 inode 同一性兜底。
             const int oRdonly = 0;
-            var dirFd = open(home, oRdonly);
+            var oNoFollowDir = OperatingSystem.IsMacOS() ? 0x0100 : 0x20000;
+            var dirFd = open(home, oRdonly | oNoFollowDir);
             if (dirFd < 0 || !FdMatchesPathByInode(dirFd, home))
                 throw new VaultException($"安全限制：home 目录在施权瞬间被替换或无法打开：{home}");
             try
