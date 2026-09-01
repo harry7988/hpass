@@ -37,26 +37,56 @@ public static class Hardening
     [System.Runtime.InteropServices.DllImport("libc", SetLastError = true)]
     private static extern int fchown(int fd, uint owner, uint group);
 
+    // Linux 64 位（x64/arm64 同布局）struct stat 前 16 字节 = st_dev(8) + st_ino(8)
     [System.Runtime.InteropServices.DllImport("libc", SetLastError = true)]
-    private static extern int fchmod(int fd, uint mode);
+    private static extern int fstat(int fd, byte[] buf);
 
-    [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
-    private struct GroupStruct
+    [System.Runtime.InteropServices.DllImport("libc", SetLastError = true)]
+    private static extern int lstat(string path, byte[] buf);
+
+    /// <summary>fd 的 (st_dev, st_ino)。</summary>
+    private static (long Dev, long Ino) StatFd(int fd)
     {
-        public IntPtr gr_name;
-        public IntPtr gr_passwd;
-        public uint gr_gid;
-        public IntPtr gr_mem;
+        var buf = new byte[16];
+        return fstat(fd, buf) != 0 ? (-1, -1) : (BitConverter.ToInt64(buf, 0), BitConverter.ToInt64(buf, 8));
+    }
+
+    /// <summary>路径的 lstat（不跟随链接）(st_dev, st_ino)。</summary>
+    private static (long Dev, long Ino) LStatPath(string path)
+    {
+        var buf = new byte[16];
+        return lstat(path, buf) != 0 ? (-1, -1) : (BitConverter.ToInt64(buf, 0), BitConverter.ToInt64(buf, 8));
+    }
+
+    /// <summary>
+    /// Linux inode 级同一性：fstat(fd) 与 lstat(path) 的 dev+ino 必须一致。免疫两个方向的偷换——
+    /// open 前被换成链接（fd=链接目标，lstat=链接自身 inode）与 open 后被换（fd=原 inode，lstat=新 inode）。
+    /// （字符串路径比较是"自洽"的：path 本身是链接时两侧都解析到攻击目标，恒等——已实证可绕过。）
+    /// macOS 不适用（struct 布局不同）：依赖 O_NOFOLLOW（实测生效）+ 事后非链接复核。
+    /// </summary>
+    private static bool FdMatchesPathByInode(int fd, string path)
+    {
+        if (!OperatingSystem.IsLinux()) return true;
+        var a = StatFd(fd);
+        var b = LStatPath(path);
+        return a.Dev >= 0 && b.Dev >= 0 && a == b;
     }
 
     [System.Runtime.InteropServices.DllImport("libc", SetLastError = true)]
-    private static extern IntPtr getgrnam(string name);
+    private static extern int fchmod(int fd, uint mode);
 
-    /// <summary>组名 → gid（失败 -1）。</summary>
+    /// <summary>组名 → gid（失败 -1）。经 shell（getent/dscl）解析——getgrnam 的结构体编组在 AOT 下崩溃，弃用。</summary>
     public static int GroupGid(string name)
     {
-        var ptr = getgrnam(name);
-        return ptr == IntPtr.Zero ? -1 : (int)System.Runtime.InteropServices.Marshal.PtrToStructure<GroupStruct>(ptr).gr_gid;
+        if (string.IsNullOrEmpty(name)) return -1;
+        if (OperatingSystem.IsLinux())
+        {
+            var parts = Sh($"getent group {Q(name)} 2>/dev/null").Trim().Split(':');
+            if (parts.Length >= 3 && int.TryParse(parts[2], out var g)) return g;
+            return -1;
+        }
+        var ds = Sh($"dscl . -read /Groups/{Q(name)} PrimaryGroupID 2>/dev/null").Trim().Split(':');
+        return ds.Length == 2 && int.TryParse(ds[1].Trim(), out var g2) ? g2 : -1;
     }
 
     /// <summary>
@@ -84,10 +114,8 @@ public static class Hardening
             throw new VaultException($"无法打开目标执行特权施权（可能被替换为符号链接）：{path}");
         try
         {
-            var fdLink = OperatingSystem.IsLinux() ? $"/proc/self/fd/{fd}" : $"/dev/fd/{fd}";
-            var resolved = File.ResolveLinkTarget(fdLink, returnFinalTarget: false)?.FullName;
-            if (resolved is not null && !SameFile(resolved, path))
-                throw new VaultException($"安全限制：目标在施权瞬间被替换（fd 指向与路径不一致）：{path}");
+            if (!FdMatchesPathByInode(fd, path))
+                throw new VaultException($"安全限制：目标在施权瞬间被替换（fd 与路径 inode 不一致）：{path}");
             var gid = -1;
             if (group is not null)
             {
@@ -136,13 +164,12 @@ public static class Hardening
             var fdLink = OperatingSystem.IsLinux() ? $"/proc/self/fd/{fd}" : $"/dev/fd/{fd}";
             var resolved = File.ResolveLinkTarget(fdLink, returnFinalTarget: false)?.FullName;
             // 注：Darwin 的 /dev/fd/N 非符号链接（readlink EINVAL）→ resolved=null，
-            // macOS 依赖 O_NOFOLLOW（实测生效）+ fd 读取本身；Linux 走路径同一性复核。
+            // macOS 依赖 O_NOFOLLOW（实测生效）；Linux 走 inode 同一性 + 路径复核双保险
             var realPath = resolved ?? path;
-            // 路径同一性（不依赖 SUDO_USER，覆盖 root 直接运行场景）：fd 解析出的真实路径必须就是
-            // staging 路径本身（双侧 final-target 解析，兼容符号链接祖先）；被换成指向 root 专属文件
-            // 的链接、或被 unlink（readlink 带 " (deleted)" 标记）→ 一律 fail-closed 拒绝
-            if (resolved is not null && (!SameFile(resolved, path) || resolved.EndsWith(" (deleted)")))
-                throw new VaultException("安全限制：暂存文件在打开瞬间被替换（fd 指向与路径不一致），拒绝安装");
+            // inode 同一性（Linux，免疫 open 前后双向偷换）+ macOS 的字符串复核（防跟随链接）+ "(deleted)" 显式拒绝
+            if (!FdMatchesPathByInode(fd, path)
+                || (resolved is not null && (!SameFile(resolved, path) || resolved.EndsWith(" (deleted)"))))
+                throw new VaultException("安全限制：暂存文件在打开瞬间被替换（fd 与路径不一致），拒绝安装");
             var info = new FileInfo(realPath);
             if (expectedOwnerUid >= 0 && FileOwnerUid(realPath) != expectedOwnerUid)
                 throw new VaultException("安全限制：暂存文件在打开瞬间被替换（属主与校验时不一致），拒绝安装");
@@ -368,10 +395,24 @@ public static class Hardening
         var fromRealUser = RealSudoUser() is not null;
         if (fromRealUser)
         {
-            var (group, member) = RootGroup();
-            var grp = group ?? (OperatingSystem.IsMacOS() ? "wheel" : "root");
-            var dirMode = member ? "750" : "755";
-            Sh($"chown root:{grp} {Q(home)} && chmod {dirMode} {Q(home)}", check: true);
+            // 目录施权同样 fd 化：按路径 chown/chmod 在检查→执行窗口被换链会把任意目录过户改权（实证）。
+            // O_RDONLY 打开目录即得 dirfd（实测可用；O_DIRECTORY 常量跨平台有坑故不用）+ inode 同一性 + fchown/fchmod。
+            const int oRdonly = 0;
+            var dirFd = open(home, oRdonly);
+            if (dirFd < 0 || !FdMatchesPathByInode(dirFd, home))
+                throw new VaultException($"安全限制：home 目录在施权瞬间被替换或无法打开：{home}");
+            try
+            {
+                var (group, member) = RootGroup();
+                var gid = group is null ? 0 : GroupGid(group is null ? "" : group);
+                if (gid < 0) gid = 0;   // 组解析失败 → root 组（fail-closed：宁可收紧）
+                if (fchown(dirFd, 0, (uint)gid) != 0 || fchmod(dirFd, member ? 488u : 493u) != 0)   // 0750(=488) / 0755(=493)，注意八进制换算
+                    throw new VaultException($"home 目录 fd 施权失败：{home}");
+            }
+            finally
+            {
+                close(dirFd);
+            }
         }
         // 操作后复核：目录/文件在窗口内被换成符号链接即中止（rename-dance 之外的最后防线）
         if (IsSymbolicLink(home)) throw new VaultException($"特权操作后 {home} 变成了符号链接，已中止（可能的提权攻击）");
