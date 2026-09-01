@@ -325,13 +325,8 @@ public static class Commands
             // 属主==调用用户、非符号链接、目录非 group/other 可写（挡住 /tmp 等粘滞目录伪造）
             if (!Vault.Exists(ctx.Home))
                 throw new UsageException($"安全限制：{ctx.Home} 不是已初始化的 hpass 库，拒绝在此执行特权安装");
-            if (!string.IsNullOrEmpty(sudoUser))
-            {
-                var homeOwner = Hardening.FileOwnerUid(ctx.Home);
-                var callerUid = Hardening.UserIdOf(sudoUser);
-                if (homeOwner >= 0 && callerUid >= 0 && homeOwner != callerUid)
-                    throw new UsageException($"安全限制：home 属主（uid {homeOwner}）与调用用户（uid {callerUid}）不一致，拒绝特权安装");
-            }
+            // 注：不校验 home 属主——加固态 home 本就是 root 属主（ApplyRootOwnership），属主检查会误杀正常流程；
+            // 防伪造由 Exists + 非链接 + 非 group/other 可写 + staging 属主校验共同承担
             if (Hardening.IsSymbolicLink(ctx.Home))
                 throw new UsageException($"安全限制：home 是符号链接，拒绝特权安装：{ctx.Home}");
             if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS())
