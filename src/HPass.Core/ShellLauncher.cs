@@ -158,7 +158,11 @@ public static class ShellLauncher
             psi.FileName = shell;
             psi.ArgumentList.Add("-NoProfile");
             psi.ArgumentList.Add("-Command");
-            psi.ArgumentList.Add(string.Join(' ', resolved.Select(QuoteForPwsh)));
+            var quoted = resolved.Select(QuoteForPwsh).ToArray();
+            var line = string.Join(' ', quoted);
+            // 引号包裹的命令名在 pwsh -Command 里是字符串表达式而非调用——需要调用运算符 &
+            if (quoted[0].StartsWith('\'')) line = "& " + line;
+            psi.ArgumentList.Add(line);
         }
         else
         {
@@ -307,7 +311,21 @@ public static class ShellLauncher
         return "'" + arg.Replace("'", "'\\''") + "'";
     }
 
-    /// <summary>pwsh 无条件单引号包裹（内部 ' 双写）。PowerShell 元字符集大（反引号/逗号/@/# 起始等），快速通道必挂一漏万。</summary>
+    /// <summary>
+    /// pwsh 按需单引号包裹（内部 ' 双写）。元字符集覆盖：空白/引号/反引号/逗号/流操作符/变量/通配/赋值，
+    /// 以及 token 起始的 @（splatting）/ #（注释）/ --%（停止解析）。
+    /// 注意：命令名（argv[0]）被引号包裹后在 -Command 模式是字符串表达式——调用方需加 &（见上）。
+    /// </summary>
     public static string QuoteForPwsh(string arg) =>
-        arg.Length == 0 ? "''" : "'" + arg.Replace("'", "''") + "'";
+        NeedsPwshQuote(arg) ? "'" + arg.Replace("'", "''") + "'" : arg;
+
+    private static bool NeedsPwshQuote(string arg)
+    {
+        if (arg.Length == 0) return true;
+        if (arg[0] is '@' or '#' || arg.StartsWith("--%")) return true;
+        foreach (var c in arg)
+            if (char.IsWhiteSpace(c) || c is '\'' or '"' or '`' or ',' or ';' or '&' or '|' or '(' or ')' or '<' or '>' or '{' or '}' or '$' or '*' or '?' or '[' or ']' or '=' or '^')
+                return true;
+        return false;
+    }
 }

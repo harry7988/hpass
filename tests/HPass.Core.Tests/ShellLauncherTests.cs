@@ -200,13 +200,18 @@ public class ShellLauncherTests : IDisposable
     }
 
     [Fact]
-    public void QuoteForPwsh_AlwaysQuotes_MetaCharacters()
+    public void QuoteForPwsh_QuotesIfNeeded_MetaCharacters()
     {
         Assert.Equal("'a`b'", ShellLauncher.QuoteForPwsh("a`b"));
         Assert.Equal("'a,b'", ShellLauncher.QuoteForPwsh("a,b"));
-        Assert.Equal("'plain'", ShellLauncher.QuoteForPwsh("plain"));
+        Assert.Equal("'@splat'", ShellLauncher.QuoteForPwsh("@splat"));
+        Assert.Equal("'#tag'", ShellLauncher.QuoteForPwsh("#tag"));
+        Assert.Equal("plain", ShellLauncher.QuoteForPwsh("plain"));
+        Assert.Equal("-c", ShellLauncher.QuoteForPwsh("-c"));
         Assert.Equal("''", ShellLauncher.QuoteForPwsh(""));
         Assert.Equal("'it''s'", ShellLauncher.QuoteForPwsh("it's"));
+        Assert.Equal("'a b'", ShellLauncher.QuoteForPwsh("a b"));
+        Assert.Equal("'a$b'", ShellLauncher.QuoteForPwsh("a$b"));
     }
 
     [Fact]
