@@ -401,15 +401,14 @@ public static class Hardening
         // 目录先打开并校验：入口检查到文件施权之间隔着多次 shell 派生（毫秒级窗口），先钉住 inode 再动文件
         var earlyNoFollow = OperatingSystem.IsMacOS() ? 0x0100 : 0x20000;
         var earlyFd = open(home, 0 | earlyNoFollow);
-        if (earlyFd >= 0)
+        if (earlyFd < 0)
+            throw new VaultException($"安全限制：无法打开 home 目录执行施权前校验：{home}");   // fail-closed，不静默跳过
+        try
         {
-            try
-            {
-                if (!FdMatchesPathByInode(earlyFd, home))
-                    throw new VaultException($"安全限制：home 目录在施权前校验失败（可能被替换）：{home}");
-            }
-            finally { close(earlyFd); }
+            if (!FdMatchesPathByInode(earlyFd, home))
+                throw new VaultException($"安全限制：home 目录在施权前校验失败（可能被替换）：{home}");
         }
+        finally { close(earlyFd); }
         foreach (var f in CoreFiles)
         {
             var p = Path.Combine(home, f);

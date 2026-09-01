@@ -82,7 +82,7 @@ hpass set <条目名> -t <类型:database|ssh|api|cloud|自定义> -u <账号> -
 1. 识别平台（`uname -s`/`uname -m`）；
 2. 从 GitHub Release 下载对应 RID 二进制并校验 sha256（未发布则源码构建：.NET 10 SDK，`dotnet publish -r <rid> -c Release /p:PublishAot=true`）；
 3. 放入 PATH，`hpass version` 验证；
-4. `hpass init` —— 主口令由用户本人输入；默认请求 sudo/UAC 做文件加固，属正常；
+4. `hpass init` —— 主口令由用户本人输入（基础模式 700/600）；随后建议执行 `hpass harden` 启用管理员级写保护（sudo/UAC 属正常）；
 5. `hpass doctor` 验证；引导用户录入首批凭据；如需人工验证脱敏：`hpass exec --allow-echo -- echo {{条目名}}`（直接回显占位符会被拒绝）。
 
 > 注：hpass 处于开发中，本 skill 描述 v1 目标行为。若命令不存在或行为不符，提示用户当前里程碑尚未实现，**不要臆造替代方案**（尤其不要退回到"把密码贴进对话"）。

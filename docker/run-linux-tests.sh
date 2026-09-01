@@ -13,7 +13,8 @@ docker run --rm -v "$REPO":/src:ro "$IMAGE" bash -euo pipefail -c '
   useradd -m tester 2>/dev/null || true
   cp -a /src /work && chown -R tester /work
   rm -rf /work/src/*/obj /work/src/*/bin /work/tests/*/obj /work/tests/*/bin /work/publish /work/dist
-  su tester -c "cd /work && dotnet test -v q 2>&1 | tail -4"
+  # 注意不能用管道 tail（/bin/sh 无 pipefail，会吞掉 dotnet test 的失败退出码 → 假通过）
+  su tester -c "cd /work && dotnet test -v q > /tmp/test.log 2>&1; ec=\$?; tail -4 /tmp/test.log; exit \$ec"
 '
 
 echo "== 阶段2：真实 root 加固/自动提权安装/并发锁/staging 攻击对抗 =="
@@ -77,7 +78,8 @@ docker run --rm -v "$REPO":/src:ro "$IMAGE" bash -euxo pipefail -c '
   PWNED=0
   for i in $(seq 1 12); do
     echo "Atk-Pass-$i" | run_user "hpass set t$i --password-stdin" >/dev/null 2>&1 || true
-    if run_user "hpass list --json" 2>/dev/null | grep -q ROOT-SECRET; then PWNED=1; echo "   [第 $i 次] 泄露！"; break; fi
+    # oracle 必须查落盘的 vault.json 本体（list --json 只输出元数据，密文内容永远不出现 → 恒假通过）
+    if su tester -c "grep -q ROOT-SECRET $H/vault.json 2>/dev/null"; then PWNED=1; echo "   [第 $i 次] 泄露！"; break; fi
   done
   kill $ATTACKER 2>/dev/null || true
   if [ "$PWNED" = "1" ]; then echo "FAIL: staging 竞态导致 root 专属文件泄露"; sudo -n rm -rf "$H" /opt/attack; exit 1; fi

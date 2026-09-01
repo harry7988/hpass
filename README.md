@@ -61,8 +61,9 @@ dotnet publish src/HPass.Cli -c Release -r osx-arm64 /p:PublishAot=true -o publi
 ## 快速上手
 
 ```bash
-# 1. 初始化（设置主口令；默认请求 sudo/UAC 做文件加固，属正常）
+# 1. 初始化（设置主口令；基础模式：目录 700 / 文件 600）
 hpass init
+# （可选但建议）启用管理员级写保护：hpass harden
 
 # 2. 录入凭据（人类操作；密码为隐藏输入，AI 不参与）
 hpass set db-local -t database -u root -T prod -f host=127.0.0.1
