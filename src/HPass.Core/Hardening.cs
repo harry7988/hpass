@@ -35,6 +35,46 @@ public static class Hardening
     private static extern int open(string path, int flags);
 
     /// <summary>
+    /// fd-based 安全读取：open 后经 /proc/self/fd/&lt;fd&gt; 对**已打开的 inode** 复核属主/大小再读。
+    /// 消除"路径检查→按路径读"的 check-then-use 竞态（同 UID 攻击者在窗口内把 staging 换成指向
+    /// root 专属文件的符号链接 → root 读取并安装为用户可读文件 = 跨特权泄露）。Linux 专用；
+    /// open(O_RDONLY|O_NOFOLLOW) 尽力而为（该 flag 经 P/Invoke 的生效性平台不一），真正的闭环
+    /// 在于 fd 已锁定 inode：即使 open 跟随了链接，基于 fd 的属主复核（==expectedUid）仍会拒绝。
+    /// </summary>
+    public static byte[] ReadStagedFdBased(string path, int expectedOwnerUid)
+    {
+        const int oRdonly = 0;
+        var oNoFollow = OperatingSystem.IsMacOS() ? 0x0100 : 0x20000;
+        var fd = open(path, oRdonly | oNoFollow);
+        if (fd < 0)
+            throw new VaultException($"无法打开暂存文件（可能被替换或为符号链接）：{path}");
+        try
+        {
+            // 在 hpass 进程内解析 fd 链接得到真实路径（/proc/self 指向 hpass 自身），
+            // 再对普通路径查属主——FileOwnerUid 经 shell 执行，其 /proc/self 会指向 shell 而非本进程
+            var realPath = File.ResolveLinkTarget($"/proc/self/fd/{fd}", returnFinalTarget: false)?.FullName ?? path;
+            var info = new FileInfo(realPath);
+            if (expectedOwnerUid >= 0 && FileOwnerUid(realPath) != expectedOwnerUid)
+                throw new VaultException("安全限制：暂存文件在打开瞬间被替换（属主与校验时不一致），拒绝安装");
+            if (info.Length > 8 * 1024 * 1024)
+                throw new VaultException($"暂存文件过大（{info.Length} 字节），拒绝安装");
+            using var fs = new FileStream(new Microsoft.Win32.SafeHandles.SafeFileHandle((IntPtr)fd, ownsHandle: false),
+                FileAccess.Read);
+            using var ms = new MemoryStream();
+            fs.CopyTo(ms);
+            return ms.ToArray();
+        }
+        finally
+        {
+            _ = System.Runtime.InteropServices.Marshal.GetLastWin32Error(); // no-op 触达
+            close(fd);
+        }
+    }
+
+    [System.Runtime.InteropServices.DllImport("libc", SetLastError = true)]
+    private static extern int close(int fd);
+
+    /// <summary>
     /// 裸 open(O_RDWR|O_NOFOLLOW)：不经 .NET 的共享模拟（其把写访问变为排他 fcntl，并发 open 即冲突），
     /// 且绝不跟随符号链接——root 侧后续的属主归还/加锁若落在链接上会把特权操作重定向到任意文件（提权）。
     /// 文件由 .NET 预创建并收紧 600——libc 的 open 是变参函数，mode 参数经默认 P/Invoke 传参

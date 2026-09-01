@@ -187,8 +187,9 @@ public static class ShellLauncher
     private static string ResolveCommandName(string command)
     {
         if (!OperatingSystem.IsWindows() || Path.IsPathRooted(command)) return command;
+        // 固定文案：command 可能是解析后的密文（argv[0] 为占位符场景），不得回显（I5）
         return FindOnPath(command)
-            ?? throw new UsageException($"命令未在 PATH 中找到（拒绝当前目录命中，防可执行文件种植）：{command}");
+            ?? throw new UsageException("命令未在 PATH 中找到（拒绝当前目录命中，防可执行文件种植）；命令可能不存在、未安装，或首参数不是命令名");
     }
 
     /// <summary>Windows 文件系统大小写不敏感：统一小写匹配，避免 --shell PowerShell/CMD 落入错误分支。</summary>

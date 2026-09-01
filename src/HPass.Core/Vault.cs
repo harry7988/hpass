@@ -266,6 +266,7 @@ public sealed class Vault : IDisposable
     private void StageAndInstall(string name, string finalPath, byte[] data)
     {
         Directory.CreateDirectory(StagingDir);
+        ApplyDirectoryPermissions(StagingDir);   // 700：默认 umask 下可能 775（组可写）
         var staging = Path.Combine(StagingDir, name + "." + Guid.NewGuid().ToString("N"));
         File.WriteAllBytes(staging, data);
         SecureFile.Restrict(staging);
@@ -296,8 +297,10 @@ public sealed class Vault : IDisposable
     {
         Directory.CreateDirectory(Dir);
         Directory.CreateDirectory(RunDir);
+        Directory.CreateDirectory(StagingDir);
         ApplyDirectoryPermissions(Dir);
         ApplyDirectoryPermissions(RunDir);
+        ApplyDirectoryPermissions(StagingDir);
     }
 
     private static void ApplyDirectoryPermissions(string dir)
