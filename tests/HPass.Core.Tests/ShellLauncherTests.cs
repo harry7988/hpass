@@ -146,6 +146,46 @@ public class ShellLauncherTests : IDisposable
     }
 
     [Fact]
+    public void ScriptMode_Pwsh_CmdletFailure_NonZeroExit()
+    {
+        if (!Unix) return;
+        try { ShellLauncher.ResolveShell("pwsh"); }
+        catch (UsageException) { return; }
+        // 纯 cmdlet 失败 / 命令不存在：$LASTEXITCODE 为 null/残留——$? 兜底必须给非 0（防假成功）
+        var script = Path.Combine(_tmp, "fail.ps1");
+        File.WriteAllText(script, "Get-Item /hpass-missing-xyz-9\n");
+        var (exit, _) = Run(Script(script, "pwsh"));
+        Assert.NotEqual(0, exit);
+
+        File.WriteAllText(script, "nosuchcmd-hpass-xyz --flag\n");
+        var (exit2, _) = Run(Script(script, "pwsh"));
+        Assert.NotEqual(0, exit2);
+    }
+
+    [Fact]
+    public void CommandMode_Pwsh_QuotedCommandName_Executes()
+    {
+        if (!Unix) return;
+        try { ShellLauncher.ResolveShell("pwsh"); }
+        catch (UsageException) { return; }
+        // 引号包裹的命令名（含元字符路径）经 & 调用运算符执行——& 必须在 prelude 之后
+        var values = new Dictionary<string, string> { ["{{v}}"] = "ok" };
+        var req = new ExecRequest
+        {
+            Args = ["/bin/echo", "{{v}}"],
+            Shell = "pwsh",
+            TimeoutSeconds = 15,
+            Resolve = t => values[t],
+            RedactionRules = new Dictionary<string, string>(),
+        };
+        using var stdout = new MemoryStream();
+        using var stderr = new MemoryStream();
+        var result = ShellLauncher.Run(req, stdout, stderr);
+        Assert.Equal(0, result.ExitCode);
+        Assert.Contains("ok", Encoding.UTF8.GetString(stdout.ToArray()));
+    }
+
+    [Fact]
     public void ScriptMode_Pwsh_Supported()
     {
         if (!Unix) return;

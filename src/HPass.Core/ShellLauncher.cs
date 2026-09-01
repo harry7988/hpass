@@ -132,9 +132,9 @@ public static class ShellLauncher
                     psi.ArgumentList.Add("-NoProfile");
                     psi.ArgumentList.Add("-Command");
                     psi.ArgumentList.Add("-");
-                    // -Command - 是逐语句 REPL 语义：退出码由最后一条语句决定（外部命令非 0/1 一律折叠为 1，
-                    // 失败后跟一条成功语句则变 0）。合成 exit $LASTEXITCODE 保退出码透传（用户显式 exit 会提前返回，无害）
-                    script += "\nexit $LASTEXITCODE\n";
+                    // -Command - 是逐语句 REPL 语义：退出码由最后一条语句决定。合成退出码（原生透传
+                    // $LASTEXITCODE，cmdlet 失败/命令缺失用 $? 兜底为 1），避免假成功（用户显式 exit 提前返回，无害）
+                    script += "\nexit $(if ($null -ne $LASTEXITCODE) { $LASTEXITCODE } elseif ($?) { 0 } else { 1 })\n";
                     break;
                 default: // bash / sh / zsh / dash …
                     psi.FileName = shell;
@@ -175,8 +175,9 @@ public static class ShellLauncher
             var prelude = OperatingSystem.IsWindows() ? "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; " : "";
             // & 调用运算符必须在 prelude 之后（"& [赋值语句]" 是 ParserError）：正确形态 "prelude; & 'cmd' args"
             var line = prelude + (quoted[0].StartsWith('\'') ? "& " : "") + string.Join(' ', quoted);
-            // pwsh -Command 退出码由最后语句决定（外部命令非 0/1 折叠为 1）——追加 exit 透传
-            psi.ArgumentList.Add(line + "; exit $LASTEXITCODE");
+            // pwsh 退出码合成：原生命令透传 $LASTEXITCODE；纯 cmdlet 失败/命令不存在时 $LASTEXITCODE
+            // 为 null 或残留旧值——用 $? 兜底为 1，避免假成功（exit 0）
+            psi.ArgumentList.Add(line + "; exit $(if ($null -ne $LASTEXITCODE) { $LASTEXITCODE } elseif ($?) { 0 } else { 1 })");
         }
         else
         {
