@@ -425,12 +425,21 @@ public class CliFlowTests
             Environment.SetEnvironmentVariable("HPASS_PASSPHRASE", null);
             var before = File.ReadAllText(Path.Combine(home, "vault.json"));
 
-            var (exit, stdout, _) = F.RunIn(home, null, "harden");
-            Assert.Equal(0, exit);
-            Assert.Contains(OperatingSystem.IsMacOS() ? "uchg" : "sudo", stdout);
-            Assert.Equal(before, File.ReadAllText(Path.Combine(home, "vault.json")));
+            var (exit, stdout, stderr) = F.RunIn(home, null, "harden");
             if (OperatingSystem.IsMacOS())
+            {
+                // macOS 普通用户可直接 uchg：应成功且文件被保护
+                Assert.Equal(0, exit);
+                Assert.Contains("uchg", stdout);
                 Assert.True(Hardening.IsImmutable(Path.Combine(home, "vault.json")));
+            }
+            else
+            {
+                // Linux 普通用户无法 chattr 且 sudo -n 不可用：必须非 0（假成功会让加固被静默跳过）
+                Assert.Equal(ExitCodes.Vault, exit);
+                Assert.Contains("sudo hpass", stderr);
+            }
+            Assert.Equal(before, File.ReadAllText(Path.Combine(home, "vault.json")));
         }
         finally
         {

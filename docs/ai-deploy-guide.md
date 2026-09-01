@@ -82,7 +82,7 @@ hpass doctor
 
 ### 1.6 录入首批凭据
 
-由用户本人运行（每个敏感值都是隐藏输入；`-f` 敏感字段值可从环境变量读取避免明文出现在命令行）：
+由用户本人运行（主密码为隐藏输入；非敏感配置字段用 `-f 字段=值` 传入，**敏感字段值**（api_key/token 等）请用交互隐藏输入 `-f 字段名`——命令行传值会进 shell history，hpass 也会告警）：
 
 ```bash
 hpass set db-local -t database -u root -T prod -f host=127.0.0.1 -f port=3306
@@ -142,14 +142,14 @@ hpass inspect <name>  # 单条目详情 + 可用占位符清单
 
 ## 4. 执行接口
 
-按安全性从高到低：
+按安全性从高到低（与 threat-model §5.9 一致：脚本 stdin 唯一同时避开 argv 与 /proc/<pid>/environ）：
 
 ```bash
-# ① 环境变量注入（推荐：密码不进 argv，ps 不可见）
-hpass exec --env db-local:MYSQL_PWD -- mysql -u {{db-local.user}} -e "SELECT 1"
-
-# ② 脚本 stdin 模式（脚本文件内写占位符；替换在内存完成，不落盘）
+# ① 脚本 stdin 模式（推荐：唯一同时避开 argv 与 /proc/<pid>/environ 的模式）
 hpass exec -f deploy.sh --shell auto
+
+# ② 环境变量注入（密码不进 argv；注意 Linux 祖先进程可经 /proc/<pid>/environ 读到注入的环境密文）
+hpass exec --env db-local:MYSQL_PWD -- mysql -u {{db-local.user}} -e "SELECT 1"
 
 # ③ args 内联（兼容性最好；子进程运行期间 ps 可短暂见到密码）
 hpass exec -- mysql -u {{db-local.user}} -p{{db-local}} -e "SELECT 1"

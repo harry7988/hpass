@@ -43,11 +43,11 @@ hpass inspect <name>    # 单条目 + 可用占位符清单
 ## 执行命令
 
 ```bash
-# ① 环境变量注入（推荐：密码不进 argv，ps 不可见）
-hpass exec --env db-local:MYSQL_PWD -- mysql -u {{db-local.user}} -e "SELECT 1"
-
-# ② 脚本 stdin 模式（脚本文件内写占位符；替换在内存完成，不落盘）
+# ① 脚本 stdin 模式（推荐：唯一同时避开 argv 与 /proc/<pid>/environ 的模式）
 hpass exec -f deploy.sh --shell auto
+
+# ② 环境变量注入（密码不进 argv；注意 Linux 祖先进程可经 /proc/<pid>/environ 读到注入的环境密文）
+hpass exec --env db-local:MYSQL_PWD -- mysql -u {{db-local.user}} -e "SELECT 1"
 
 # ③ args 内联（兼容性最好；子进程运行期间 ps 可短暂见到密码）
 hpass exec -- mysql -u {{db-local.user}} -p{{db-local}} -e "SELECT 1"
