@@ -43,7 +43,7 @@ public static class Hardening
     public static Microsoft.Win32.SafeHandles.SafeFileHandle OpenLockFile(string path)
     {
         const int oRdwr = 2;
-        var oNoFollow = OperatingSystem.IsMacOS() ? 0x0100 : 0x40000;   // 平台常量不同（实测 macOS=0x100，Python os.O_NOFOLLOW 对照验证）
+        var oNoFollow = OperatingSystem.IsMacOS() ? 0x0100 : 0x20000;   // 平台常量不同（实测 macOS=0x100；Linux=0o400000=0x20000）
         if (!File.Exists(path))
         {
             try { using var _ = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.ReadWrite); }
@@ -51,12 +51,14 @@ public static class Hardening
             try { File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite); }
             catch { }
         }
+        // 托管 LinkTarget 判定为主防线（P/Invoke open 的 O_NOFOLLOW 在 Linux 实测不生效、macOS 生效——
+        // 平台行为不一致，故不依赖）。检查与 open 之间的残余竞态由 root 侧 chown -h（lchown）兜底。
+        if (IsSymbolicLink(path))
+            throw new VaultException($"run/lock 是符号链接（可能的攻击或残留）：请检查并删除 {path} 后重试");
         var fd = open(path, oRdwr | oNoFollow);
         if (fd < 0)
         {
             var errno = System.Runtime.InteropServices.Marshal.GetLastWin32Error();
-            if (Hardening.IsSymbolicLink(path))
-                throw new VaultException($"run/lock 是符号链接（可能的攻击或残留）：请检查并删除 {path} 后重试");
             throw new IOException($"无法打开锁文件 {path}（errno {errno}）。若为 sudo 运行遗留的属主异常，可删除该文件后重试");
         }
         return new Microsoft.Win32.SafeHandles.SafeFileHandle((IntPtr)fd, ownsHandle: true);
