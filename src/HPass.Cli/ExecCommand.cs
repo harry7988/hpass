@@ -189,9 +189,9 @@ public static partial class ExecCommand
                 var fieldName = dot < 0 ? null : body[(dot + 1)..];
                 if (envSpecs.Any(e => e.Entry == entryName)) continue;   // env 覆盖的引用不经 shell 解析
                 if (!NeedsSecret(new PlaceholderRef(entryName, fieldName))) continue;
-                if (value.IndexOfAny(['"', '\'', '$', '`', '\\']) >= 0)
+                if (value.IndexOfAny(['"', '\'', '$', '`', '\\', '&', '|', '<', '>', '^']) >= 0)
                 {
-                    ctx.ErrText.WriteLine($"hpass: 警告：{token} 的值包含 shell 元字符（引号/美元/反引号/反斜杠），经 shell 解析可能产生变体绕过输出脱敏——建议改用 --env 注入（值不经 shell 解析）");
+                    ctx.ErrText.WriteLine($"hpass: 警告：{token} 的值包含 shell 元字符（引号/美元/反引号/反斜杠），经 shell 解析可能产生变体绕过输出脱敏（cmd 还含 & | < > ^）——建议改用 --env 注入（值不经 shell 解析）");
                     break;
                 }
             }

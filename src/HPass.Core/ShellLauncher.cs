@@ -154,10 +154,11 @@ public static class ShellLauncher
         }
         else if (shellName is "cmd" or "cmd.exe")
         {
-            // cmd 的引号规则与 MSVCRT 不同：直接拼 raw 命令串交给 /c，不做参数级加引号
+            // cmd 的引号规则与 MSVCRT 不同：直接拼 raw 命令串交给 /c，不做参数级加引号；
+            // chcp 65001：cmd 对管道输出用 OEM 代码页——非 ASCII 密文会与 UTF-8 脱敏规则失配
             psi.FileName = shell;
             psi.ArgumentList.Add("/c");
-            psi.ArgumentList.Add(string.Join(' ', resolved.Select((a, i) => i == 0 ? ResolveCommandName(a) : a)));
+            psi.ArgumentList.Add("chcp 65001 >nul & " + string.Join(' ', resolved.Select((a, i) => i == 0 ? ResolveCommandName(a) : a)));
         }
         else if (shellName is "pwsh" or "pwsh.exe" or "powershell" or "powershell.exe")
         {
@@ -165,7 +166,10 @@ public static class ShellLauncher
             psi.ArgumentList.Add("-NoProfile");
             psi.ArgumentList.Add("-Command");
             var quoted = resolved.Select(QuoteForPwsh).ToArray();
-            var line = string.Join(' ', quoted);
+            // Windows PowerShell 5.1 对重定向输出用 OEM/ANSI 代码页编码——非 ASCII 密文的字节形态会
+            // 与 UTF-8 脱敏规则失配（I3 绕过）。前置强制 UTF-8 输出（pwsh 7 默认 UTF-8，无副作用）
+            var prelude = OperatingSystem.IsWindows() ? "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; " : "";
+            var line = prelude + string.Join(' ', quoted);
             // 引号包裹的命令名在 pwsh -Command 里是字符串表达式而非调用——需要调用运算符 &
             if (quoted[0].StartsWith('\'')) line = "& " + line;
             psi.ArgumentList.Add(line);
