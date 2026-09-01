@@ -308,14 +308,21 @@ public static class Commands
         }
         // 非交互（AI/CI 常态）：先尝试免密 sudo（与安装路径对齐），失败必须返回非 0——
         // 退出码 0 会让 `hpass harden && …` 得到"加固已启用"的假信号
-        var sudoN = Hardening.SudoPath();
-        if (sudoN is not null)
+        if (Environment.GetEnvironmentVariable("HPASS_NO_SUDO") != "1")
         {
-            var exeN = Environment.ProcessPath;
-            if (exeN is not null && Hardening.IsTrustedBinaryPath(exeN))
+            var sudoN = Hardening.SudoPath();
+            if (sudoN is not null)
             {
-                var (codeN, _, _) = Hardening.RunCaptureEx(sudoN, ["-n", "--", exeN, "--home", ctx.Home, "harden"]);
-                if (codeN == 0) return ExitCodes.Ok;
+                var exeN = Environment.ProcessPath;
+                if (exeN is not null && Hardening.IsTrustedBinaryPath(exeN))
+                {
+                    var (codeN, _, _) = Hardening.RunCaptureEx(sudoN, ["-n", "--", exeN, "--home", ctx.Home, "harden"], timeoutMs: 120_000);
+                    if (codeN == 0)
+                    {
+                        ctx.OutText.WriteLine("已加固（管理员级，经 sudo -n）：root 属主 + 不可变标志，密码文件只可整体覆盖。");
+                        return ExitCodes.Ok;
+                    }
+                }
             }
         }
         ctx.ErrText.WriteLine($"hpass: 非交互环境未能完成加固（Linux 普通用户无法 chattr 且 sudo -n 不可用）。请手动运行：sudo hpass --home {Hardening.Q(ctx.Home)} harden");

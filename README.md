@@ -20,7 +20,7 @@ AI 收到：mysql: [输出] ...（若输出中出现密码，已被替换为 {{d
 
 - **零上下文泄露**：没有任何查看密码的命令；子进程输出流式脱敏后才返回。
 - **弱密码与探测防护**：录入时拦截"密码=常见语句"（会误替换日志、且替换位置会暴露密码内容，`--force-weak` 可覆盖）；`exec` 拒绝回显探测命令（echo/printf 与占位符同语句，`--allow-echo` 放行）；单次输出替换超过 32 次会告警提示换强密码。
-- **三种执行模式**：args 内联（兼容）、环境变量注入（推荐，`ps` 不可见）、脚本 stdin（脚本内占位符，不落盘不进 argv）。
+- **三种执行模式**（安全性递增）：args 内联（兼容）→ 环境变量注入（`ps` 不可见，但 Linux 祖先进程可经 /proc/<pid>/environ 读到）→ 脚本 stdin（推荐：唯一同时避开 argv 与 environ 的模式，不落盘不进 argv）。
 - **包装四种 shell**：bash / sh / pwsh / cmd，跨平台自动探测或显式指定。
 - **扩展条目模型**：账号类型、账号、租户、自定义字段 —— 元数据可查（AI 组装命令用），密码与字段值不可查。
 - **信封加密**：口令 → PBKDF2 → 加密 RSA-3072 私钥 → OAEP 包裹 AES-256 数据密钥 → 每条 AEAD 加密（AAD 防密文互换）。
@@ -73,8 +73,8 @@ hpass list --json
 
 # 4. AI 代理执行
 hpass exec -- mysql -u {{db-local.user}} -p{{db-local}} -e "SELECT 1"
-hpass exec --env db-local:MYSQL_PWD -- mysql -u {{db-local.user}} -e "SELECT 1"   # 更安全
-hpass exec -f deploy.sh          # 脚本内写 {{db-local}}，替换后经 stdin 执行
+hpass exec --env db-local:MYSQL_PWD -- mysql -u {{db-local.user}} -e "SELECT 1"   # 次优（/proc/<pid>/environ 对祖先进程可读）
+hpass exec -f deploy.sh          # 推荐：唯一同时避开 argv 与 environ 的模式
 ```
 
 ## 条目模型
@@ -144,7 +144,7 @@ git clone git@github.com:harry7988/hpass.git && cd hpass
 5. 日志/错误永不回显已解析命令
 6. vault 变更仅经特权原子覆盖，`exec` 永不提权
 
-**如实声明的边界**：防密码意外进入上下文/日志/备份，不防已提权的恶意软件与恶意 Agent 主动编码外传；内联模式下密码在子进程运行期间可通过 `ps` 短暂可见（用 env 注入/脚本 stdin 模式规避）。完整威胁模型：[docs/threat-model.md](docs/threat-model.md)。
+**如实声明的边界**：防密码意外进入上下文/日志/备份，不防已提权的恶意软件与恶意 Agent 主动编码外传；内联模式下密码在子进程运行期间可通过 `ps` 短暂可见（优先级：脚本 stdin > env 注入 > 内联；env 注入在 Linux 上对祖先进程可经 /proc/<pid>/environ 读到，脚本 stdin 是唯一同时避开两者的模式）。完整威胁模型：[docs/threat-model.md](docs/threat-model.md)。
 
 ## 平台支持
 
