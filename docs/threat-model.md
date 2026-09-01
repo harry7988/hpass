@@ -129,6 +129,13 @@
 13. root 安装路径的防御为：暂存目录链 symlink 检查 + 内容结构验证（合法 JSON）+ O_EXCL 临时名 + rename 覆盖
     （不跟随链接）+ 操作后复核。同 UID 恶意进程仍可竞争覆写暂存（安装出"结构合法"的伪造库）——属已声明的
     同 UID DoS/伪造面，root 属主校验仅收窄跨用户伪造。
+14b. 并发写互斥 = 裸 open + flock 限时排队（60s，超时报"稍后重试"）；.NET 的 FileShare/Access 在 Unix 上
+     会被模拟为排他 fcntl（并发 open 即冲突、无等待），故锁文件不走托管 FileStream（Windows 除外）。
+14c. root 直接运行（su / root-shell，SUDO_USER 缺失或为 root）时：目录与文件均不改变属主，仅收紧权限 + 不可变
+     （找不到可对齐的真实用户；chown root:root 会把用户自己的库锁死）。此时文件为 444——密文对本地用户可读
+     属既定回退（见 macOS staff 条目）。
+14d. 不支持 chattr/chflags 的文件系统（overlayfs/tmpfs/NFS 等）上不可变标志自动降级（安装不阻断，
+     保护等级由 doctor/GetLevel 如实报告）。
 14. `config.json`（用户可写）中的 DefaultShell 已白名单化（仅 auto/bash/sh/pwsh/cmd/none），任意可执行路径只能经
     用户亲自输入的 `--shell` 指定。
 15. 孙进程持有 stdout 管道时，正常退出路径最多再等 10s 后输出尾部可能被截断（数据丢失面，非泄露面）。

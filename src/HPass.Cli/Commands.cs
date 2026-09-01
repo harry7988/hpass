@@ -115,8 +115,9 @@ public static class Commands
         if (!forceWeak && WeakSecret.Check(password) is { } reason)
             throw new UsageException($"拒绝保存弱密码：{reason}。如确要使用请追加 --force-weak（风险自担：输出中的常见文本会被大面积误替换为占位符，并可被据此推测）");
 
-        using var vault = Vault.Open(ctx.Home);
+        // 先取锁再读：Open 在锁前会读到陈旧快照，并发写覆盖会丢更新（last-writer-wins）
         using var _lock = Vault.FileLock.Acquire(ctx.Home);
+        using var vault = Vault.Open(ctx.Home);
         vault.Unlock(GetPassphrase(ctx, confirm: false));
         var entry = vault.GetOrAdd(name, type, username, tenant);
         vault.SetPassword(entry, password);
@@ -212,8 +213,9 @@ public static class Commands
     public static int Delete(CliContext ctx, string[] args)
     {
         var name = args.FirstOrDefault(a => !a.StartsWith('-')) ?? throw new UsageException("用法：hpass delete <名>");
-        using var vault = Vault.Open(ctx.Home);
+        // 先取锁再读：Open 在锁前会读到陈旧快照，并发写覆盖会丢更新（last-writer-wins）
         using var _lock = Vault.FileLock.Acquire(ctx.Home);
+        using var vault = Vault.Open(ctx.Home);
         if (!vault.Delete(name)) throw new VaultException($"条目不存在：{name}");
         vault.Save();
         ctx.OutText.WriteLine($"已删除 {name}");
@@ -224,8 +226,9 @@ public static class Commands
     {
         var positional = args.Where(a => !a.StartsWith('-')).ToList();
         if (positional.Count != 2) throw new UsageException("用法：hpass rename <旧名> <新名>");
-        using var vault = Vault.Open(ctx.Home);
+        // 先取锁再读：Open 在锁前会读到陈旧快照，并发写覆盖会丢更新（last-writer-wins）
         using var _lock = Vault.FileLock.Acquire(ctx.Home);
+        using var vault = Vault.Open(ctx.Home);
         vault.Unlock(GetPassphrase(ctx, confirm: false));
         vault.Rename(positional[0], positional[1]);
         vault.Save();
@@ -235,8 +238,9 @@ public static class Commands
 
     public static int Rotate(CliContext ctx, string[] args)
     {
-        using var vault = Vault.Open(ctx.Home);
+        // 先取锁再读：Open 在锁前会读到陈旧快照，并发写覆盖会丢更新（last-writer-wins）
         using var _lock = Vault.FileLock.Acquire(ctx.Home);
+        using var vault = Vault.Open(ctx.Home);
         var passphrase = GetPassphrase(ctx, confirm: false);
         vault.Unlock(passphrase);
         vault.Rotate(passphrase);

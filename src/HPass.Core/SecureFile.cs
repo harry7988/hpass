@@ -112,7 +112,7 @@ public static class SecureFile
             Hardening.ApplyRootOwnershipOnly(fresh);
             // 4) rename 覆盖 final：同样不跟随链接
             File.Move(fresh, finalPath, overwrite: true);
-            Hardening.SetImmutable(finalPath);
+            _ = Hardening.SetImmutable(finalPath);   // 文件系统不支持 chattr 时降级（等级由 doctor 报告）
             if (Hardening.IsSymbolicLink(finalPath))
                 throw new VaultException($"安装后目标变成符号链接，已中止：{finalPath}（可能的攻击）");
         }
@@ -243,25 +243,28 @@ public static class SecureFile
         var home = homeDir ?? Vault.DefaultHome();
         // 1) 免密 sudo（CI / 自动化），只搬运密文。子进程带 HPASS_CHILD_INSTALL 标记：
         //    写锁由父进程持有（临界区保护不变），子进程跳过重复获取以免自锁
-        // 可信性校验：hpass 自身位于用户可写路径（如 ~/.local/bin）时不自动提权——
-        // 同 UID 替换木马可借"hpass 例行 sudo 提示"收割密码；改打手动指引让用户看清 sudo 目标
-        if (!Hardening.IsTrustedBinaryPath(exe))
-            throw new NeedsElevationException(stagingPath, finalPath,
-                $"hpass 位于不受信任的路径（{exe}，用户可写位置），已禁用自动 sudo。请先校验该二进制或安装到 /usr/local/bin 后重试；" + hint);
-
         // 子进程标志经 argv 传递（--child-install）：sudo 的 env_reset 会剥离环境变量，argv 不会被改动
         var args = new List<string> { "--home", home, "_install-staged", "--child-install", stagingPath, finalPath };
-        var (code, _, err1) = Hardening.RunCaptureEx("sudo", ["-n", "--", exe, .. args]);
-        if (code == 0) return;
-        // 2) 交互终端：先给一行可识别的先行信号（防钓鱼条件反射），再由 sudo 自行提示密码（/dev/tty，不经 argv）
-        if (!Console.IsInputRedirected)
+
+        string? childErr = null;
+        // 1) 免密 sudo（CI/自动化）：宽松可信校验（属主 root/当前用户 + 目录链不可写/无链接）
+        if (Hardening.IsTrustedBinaryPath(exe))
+        {
+            var (code, _, err1) = Hardening.RunCaptureEx("sudo", ["-n", "--", exe, .. args]);
+            if (code == 0) return;
+            childErr = err1;
+        }
+        // 2) 交互终端：严格校验（二进制+目录链全 root 属主）——用户属主路径（~/.local/bin 等）下
+        //    同 UID 替换木马会借"例行 sudo 提示"获得密码认证过的 root 执行，降级为手动指引
+        if (!Console.IsInputRedirected && Hardening.IsTrustedBinaryPath(exe, requireRootOwner: true))
         {
             Console.Error.WriteLine("hpass: 即将请求 sudo 密码以安装 vault 变更（仅搬运密文，目标为上述 vault 文件）");
-            var (code2, _, _) = Hardening.RunCaptureEx("sudo", ["--", exe, .. args], timeoutMs: 300_000);
+            var (code2, _, err2) = Hardening.RunCaptureEx("sudo", ["--", exe, .. args], timeoutMs: 300_000);
             if (code2 == 0) return;
+            childErr ??= err2;
         }
         // 提权子进程的失败原因（固定文案，不含密文）带回给用户定位
-        var childErr = err1.Length > 0 ? "；提权子进程输出：" + (err1.Length > 300 ? err1[..300] : err1).Trim() : "";
-        throw new NeedsElevationException(stagingPath, finalPath, hint + childErr);
+        var childErrText = (childErr?.Length ?? 0) > 0 ? "；提权子进程输出：" + (childErr!.Length > 300 ? childErr[..300] : childErr).Trim() : "";
+        throw new NeedsElevationException(stagingPath, finalPath, hint + childErrText);
     }
 }

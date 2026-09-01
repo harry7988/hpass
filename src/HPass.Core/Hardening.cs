@@ -31,13 +31,46 @@ public static class Hardening
     private const int LockEx = 2;      // LOCK_EX
     private const int LockNb = 4;      // LOCK_NB
 
-    /// <summary>跨进程互斥锁：.NET 的 FileShare 在 Unix 上无强制力（dotnet/runtime#59995），必须 flock。</summary>
-    public static void FlockExclusive(Microsoft.Win32.SafeHandles.SafeFileHandle handle)
+    [System.Runtime.InteropServices.DllImport("libc", SetLastError = true)]
+    private static extern int open(string path, int flags);
+
+    /// <summary>
+    /// 裸 open(O_RDWR)：不经 .NET 的共享模拟（其把写访问变为排他 fcntl，并发 open 即冲突）。
+    /// 文件由 .NET 预创建并收紧 600——libc 的 open 是变参函数，mode 参数经默认 P/Invoke 传参
+    /// 在 arm64 macOS 上会丢失/错乱（实测），因此只做两参数调用。
+    /// </summary>
+    public static Microsoft.Win32.SafeHandles.SafeFileHandle OpenLockFile(string path)
     {
-        if (!Unix) return;
+        const int oRdwr = 2;
+        if (!File.Exists(path))
+        {
+            try { using var _ = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.ReadWrite); }
+            catch (IOException) { /* 并发首建：败者直接走后续 open */ }
+            try { File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite); }
+            catch { }
+        }
+        var fd = open(path, oRdwr);
+        if (fd < 0)
+            throw new IOException($"无法打开锁文件 {path}（errno {System.Runtime.InteropServices.Marshal.GetLastWin32Error()}）");
+        return new Microsoft.Win32.SafeHandles.SafeFileHandle((IntPtr)fd, ownsHandle: true);
+    }
+
+    /// <summary>
+    /// 跨进程互斥锁：.NET 的 FileShare 在 Unix 上无强制力（dotnet/runtime#59995），必须 flock。
+    /// 限时阻塞等待（默认 60s）而非立即失败——并发写（AI 同时触发多条 set）应排队而非大量报错。
+    /// 返回是否获得锁；false = 超时。
+    /// </summary>
+    public static bool FlockExclusive(Microsoft.Win32.SafeHandles.SafeFileHandle handle, int timeoutMs = 60_000)
+    {
+        if (!Unix) return true;
         var fd = handle.DangerousGetHandle().ToInt32();
-        if (flock(fd, LockEx | LockNb) != 0)
-            throw new IOException($"flock 失败（errno {System.Runtime.InteropServices.Marshal.GetLastWin32Error()}）");
+        var deadline = Environment.TickCount64 + timeoutMs;
+        while (true)
+        {
+            if (flock(fd, LockEx | LockNb) == 0) return true;
+            if (Environment.TickCount64 >= deadline) return false;
+            System.Threading.Thread.Sleep(100);
+        }
     }
 
     /// <summary>以 geteuid 判定（SUDO_USER 等环境变量可被任意进程伪造，只作展示参考）。</summary>
@@ -127,13 +160,34 @@ public static class Hardening
         return "ACL 拒写";
     }
 
-    /// <summary>设置不可变标志：root → schg / chattr +i；普通用户 macOS → uchg；普通用户 Linux 无法设置（静默跳过，调用方负责检查）。</summary>
-    public static void SetImmutable(string path)
+    /// <summary>
+    /// 设置不可变标志：root → schg / chattr +i；普通用户 macOS → uchg。
+    /// 返回是否成功：Linux 上 chattr 需 root 且文件系统须支持（overlayfs/tmpfs/NFS 等不支持）——
+    /// 不支持时降级返回 false（加密与原子覆盖不受影响，保护等级由 doctor/GetLevel 如实报告），
+    /// 调用方不得因不可变不可用而阻断安装。
+    /// </summary>
+    public static bool SetImmutable(string path)
     {
         if (OperatingSystem.IsMacOS())
+        {
             Sh($"chflags {(IsRoot() ? "schg" : "uchg")} {Q(path)}", check: true);
-        else if (OperatingSystem.IsLinux())
-            Sh($"chattr +i {Q(path)}", check: IsRoot());
+            return true;
+        }
+        if (OperatingSystem.IsLinux())
+            return Sh($"chattr +i {Q(path)} 2>/dev/null || true").Length >= 0 && LastShellExit == 0;
+        return false;
+    }
+
+    /// <summary>最近一次 Sh 调用的退出码（供需要"不抛但要看结果"的调用方读取）。</summary>
+    private static int LastShellExit;
+
+    private static string ShImpl(string command, bool check)
+    {
+        var (code, output) = RunCapture("/bin/sh", ["-c", command]);
+        LastShellExit = code;
+        if (check && code != 0)
+            throw new VaultException($"加固命令失败（exit {code}）：{command}");
+        return output;
     }
 
     /// <summary>清除不可变标志（uchg 属主可清；schg/​+i 需要 root，非 root 时静默失败）。</summary>
@@ -161,10 +215,16 @@ public static class Hardening
             var p = Path.Combine(home, f);
             if (File.Exists(p)) ApplyRootFilePerms(p);
         }
-        var (group, member) = RootGroup();
-        var grp = group ?? (OperatingSystem.IsMacOS() ? "wheel" : "root");
-        var dirMode = member ? "750" : "755";
-        Sh($"chown root:{grp} {Q(home)} && chmod {dirMode} {Q(home)}", check: true);
+        // 目录属主收紧只在能识别真实调用用户时进行：root 直接运行（su / sudo-from-root，SUDO_USER 缺失或为 root）
+        // 时保持目录原属主——否则 chown root:root 750 会让用户连进入 home 都做不到，exec 读路径全部锁死
+        var fromRealUser = RealSudoUser() is not null;
+        if (fromRealUser)
+        {
+            var (group, member) = RootGroup();
+            var grp = group ?? (OperatingSystem.IsMacOS() ? "wheel" : "root");
+            var dirMode = member ? "750" : "755";
+            Sh($"chown root:{grp} {Q(home)} && chmod {dirMode} {Q(home)}", check: true);
+        }
         // 操作后复核：目录/文件在窗口内被换成符号链接即中止（rename-dance 之外的最后防线）
         if (IsSymbolicLink(home)) throw new VaultException($"特权操作后 {home} 变成了符号链接，已中止（可能的提权攻击）");
     }
@@ -173,6 +233,12 @@ public static class Hardening
     public static void ApplyRootOwnershipOnly(string path)
     {
         if (IsSymbolicLink(path)) throw new VaultException($"拒绝对符号链接执行特权操作：{path}（可能的提权攻击）");
+        if (RealSudoUser() is null)
+        {
+            // root 直接运行（su/root-shell）：无真实用户可对齐——不改属主，444 保住"只可整体覆盖"且用户仍可读
+            Sh($"chmod 444 {Q(path)}", check: true);
+            return;
+        }
         var (group, member) = RootGroup();
         var grp = group ?? (OperatingSystem.IsMacOS() ? "wheel" : "root");
         var mode = member ? "440" : "444";
@@ -182,6 +248,13 @@ public static class Hardening
     public static void ApplyRootFilePerms(string path)
     {
         if (IsSymbolicLink(path)) throw new VaultException($"拒绝对符号链接执行特权操作：{path}（可能的提权攻击）");
+        if (RealSudoUser() is null)
+        {
+            // root 直接运行：不改属主（用户仍可读），444 + 不可变已构成"只可整体覆盖"保护
+            Sh($"chmod 444 {Q(path)}", check: true);
+            _ = SetImmutable(path);
+            return;
+        }
         var (group, member) = RootGroup();
         var grp = group ?? (OperatingSystem.IsMacOS() ? "wheel" : "root");
         var mode = member ? "440" : "444";
@@ -228,11 +301,14 @@ public static class Hardening
     }
 
     /// <summary>
-    /// sudo 前校验自身可执行路径可信：属主为当前用户或 root，且从文件到根的每一级目录
-    /// 非 group/other 可写、非符号链接。不满足则不自动提权（用户可写位置的 hpass 可能被同 UID
-    /// 替换为木马，借"hpass 例行 sudo 提示"收割密码）——打印手动指引让用户亲自看清 sudo 目标。
+    /// sudo 前校验自身可执行路径可信，分两档：
+    /// - 宽松（免密 sudo -n 分支）：属主为当前用户或 root + 目录链无 group/other 写 + 无链接
+    ///   （NOPASSWD 环境下同 UID 本就可 sudo 任意命令，无增量风险）；
+    /// - 严格（交互输密码分支）：二进制及目录链必须全为 root 属主——用户属主的 hpass 位于
+    ///   用户可写位置（如 ~/.local/bin），同 UID 替换木马后借"hpass 例行 sudo 提示"获得
+    ///   密码认证过的 root 代码执行。严格档不过则降级为手动指引（用户亲眼看清 sudo 目标）。
     /// </summary>
-    public static bool IsTrustedBinaryPath(string path)
+    public static bool IsTrustedBinaryPath(string path, bool requireRootOwner = false)
     {
         if (!Unix) return true;
         try
@@ -241,12 +317,18 @@ public static class Hardening
             var uid = geteuid();
             var owner = FileOwnerUid(full);
             if (owner != (int)uid && owner != 0) return false;
+            if (requireRootOwner && owner != 0) return false;
             var dir = Path.GetDirectoryName(full);
             while (!string.IsNullOrEmpty(dir))
             {
                 if (IsSymbolicLink(dir)) return false;
                 var mode = File.GetUnixFileMode(dir);
                 if (mode.HasFlag(UnixFileMode.GroupWrite) || mode.HasFlag(UnixFileMode.OtherWrite)) return false;
+                if (requireRootOwner)
+                {
+                    var dirOwner = FileOwnerUid(dir);
+                    if (dirOwner != 0) return false;
+                }
                 var parent = Path.GetDirectoryName(dir);
                 if (parent is null || parent == dir) break;
                 dir = parent;
@@ -259,16 +341,17 @@ public static class Hardening
         }
     }
 
+    /// <summary>真实调用用户（sudo 由普通用户发起时才有；su/root-shell 下为 null）。找不到时特权操作不得改变属主。</summary>
+    public static string? RealSudoUser()
+    {
+        var u = Environment.GetEnvironmentVariable("SUDO_USER");
+        return string.IsNullOrEmpty(u) || u == "root" ? null : u;
+    }
+
     public static string Q(string p) => "'" + p.Replace("'", "'\\''") + "'";
 
     /// <summary>执行 shell 命令；check=true 时非零退出抛 VaultException。返回 stdout。</summary>
-    public static string Sh(string command, bool check = false)
-    {
-        var (code, output) = RunCapture("/bin/sh", ["-c", command]);
-        if (check && code != 0)
-            throw new VaultException($"加固命令失败（exit {code}）：{command}");
-        return output;
-    }
+    public static string Sh(string command, bool check = false) => ShImpl(command, check);
 
     /// <summary>同 RunCapture，但额外捕获 stderr（用于把提权子进程的失败原因带回给调用方）。</summary>
     public static (int Exit, string Output, string Stderr) RunCaptureEx(string fileName, IReadOnlyList<string> args, int timeoutMs = 10_000, Action<ProcessStartInfo>? configure = null)

@@ -323,12 +323,44 @@ public sealed class Vault : IDisposable
     /// <summary>写操作的进程内互斥锁（跨进程用文件锁文件 run/lock）。</summary>
     public sealed class FileLock : IDisposable
     {
-        private readonly FileStream _fs;
-        private FileLock(FileStream fs) { _fs = fs; }
+        private readonly FileStream? _fs;
+        private readonly Microsoft.Win32.SafeHandles.SafeFileHandle? _handle;
+        internal FileLock(FileStream? fs, Microsoft.Win32.SafeHandles.SafeFileHandle? handle)
+        { _fs = fs; _handle = handle; }
         public static FileLock Acquire(string dir)
         {
             Directory.CreateDirectory(Path.Combine(dir, "run"));
             var path = Path.Combine(dir, "run", "lock");
+            if (Hardening.Unix)
+            {
+                // Unix：绕开 .NET 的 FileShare/FileAccess→fcntl 锁模拟（两个写者在 open 即冲突、无等待语义）。
+                // 裸 open() + 手工限时 flock：互斥完全由 flock 提供，并发写排队而非立即失败。
+                var handle = Hardening.OpenLockFile(path);
+                try
+                {
+                    if (!Hardening.FlockExclusive(handle))
+                        throw new IOException("lock-wait-timeout");
+                    // sudo 运行会把 lock 留在 root 名下——立即归还调用用户，避免后续用户态命令永久 EACCES
+                    if (Hardening.IsRoot())
+                    {
+                        var sudoUser = Environment.GetEnvironmentVariable("SUDO_USER");
+                        if (!string.IsNullOrEmpty(sudoUser))
+                            _ = Hardening.Sh($"chown {Hardening.Q(sudoUser)} {Hardening.Q(path)} 2>/dev/null || true");
+                    }
+                    return new FileLock(null, handle);
+                }
+                catch (IOException e) when (e.Message == "lock-wait-timeout")
+                {
+                    handle.Dispose();
+                    throw new VaultException("另一个 hpass 写操作长时间未完成（等待 60s 未能获得锁），请稍后重试");
+                }
+                catch
+                {
+                    handle.Dispose();
+                    throw;
+                }
+            }
+            // Windows：FileShare.None 即互斥
             FileStream fs;
             try
             {
@@ -342,25 +374,12 @@ public sealed class Vault : IDisposable
             {
                 throw new VaultException($"run/lock 无法访问（属主异常，多为 sudo 运行遗留）：可删除 {path} 后重试，或再运行一次 sudo 命令由其自动归还属主");
             }
-            try
-            {
-                // Unix 上 FileShare 无跨进程强制力（dotnet/runtime#59995），必须 flock 才是真互斥
-                Hardening.FlockExclusive(fs.SafeFileHandle);
-                // sudo 运行会把 lock 留在 root 名下——立即归还调用用户，避免后续用户态命令永久 EACCES
-                if (Hardening.IsRoot())
-                {
-                    var sudoUser = Environment.GetEnvironmentVariable("SUDO_USER");
-                    if (!string.IsNullOrEmpty(sudoUser))
-                        _ = Hardening.Sh($"chown {Hardening.Q(sudoUser)} {Hardening.Q(path)} 2>/dev/null || true");
-                }
-            }
-            catch
-            {
-                fs.Dispose();
-                throw;
-            }
-            return new FileLock(fs);
+            return new FileLock(fs, null);
         }
-        public void Dispose() => _fs.Dispose();
+        public void Dispose()
+        {
+            _fs?.Dispose();
+            _handle?.Dispose();
+        }
     }
 }
