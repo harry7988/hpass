@@ -295,9 +295,15 @@ public static class Commands
                 ctx.ErrText.WriteLine($"hpass: 二进制位于不受信任路径（{exe}，用户可写位置），不自动提权。请手动执行：sudo hpass --home {Hardening.Q(ctx.Home)} harden（请亲眼核对 sudo 目标）");
                 return ExitCodes.Vault;
             }
+            var sudo = Hardening.SudoPath();
+            if (sudo is null)
+            {
+                ctx.ErrText.WriteLine($"hpass: 未找到 sudo（/usr/bin/sudo）。请手动执行：sudo hpass --home {Hardening.Q(ctx.Home)} harden");
+                return ExitCodes.Vault;
+            }
             ctx.OutText.WriteLine("将以 sudo 重新执行加固（root 属主 + chattr +i）…");
             Console.Error.WriteLine("hpass: 即将请求 sudo 密码执行加固（目标为上述 vault 目录）");
-            var (code, _, _) = Hardening.RunCaptureEx("sudo", ["--", exe, "--home", ctx.Home, "harden"], timeoutMs: 300_000);
+            var (code, _, _) = Hardening.RunCaptureEx(sudo, ["--", exe, "--home", ctx.Home, "harden"], timeoutMs: 300_000);
             return code == 0 ? ExitCodes.Ok : ExitCodes.Vault;
         }
         ctx.OutText.WriteLine($"非交互环境（Linux 普通用户无法 chattr）：请手动运行 sudo hpass --home {Hardening.Q(ctx.Home)} harden");

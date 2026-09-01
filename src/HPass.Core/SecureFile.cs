@@ -254,11 +254,15 @@ public static class SecureFile
         // 子进程标志经 argv 传递（--child-install）：sudo 的 env_reset 会剥离环境变量，argv 不会被改动
         var args = new List<string> { "--home", home, "_install-staged", "--child-install", stagingPath, finalPath };
 
+        // sudo 绝对路径：裸名 "sudo" 经 execvp 沿用户可控 PATH 解析——植入假 sudo 可收割口令或伪造 exit 0 假成功
+        var sudo = Hardening.SudoPath()
+            ?? throw new NeedsElevationException(stagingPath, finalPath, "未找到 sudo（/usr/bin/sudo）。" + hint);
+
         string? childErr = null;
         // 1) 免密 sudo（CI/自动化）：宽松可信校验（属主 root/当前用户 + 目录链不可写/无链接）
         if (Hardening.IsTrustedBinaryPath(exe))
         {
-            var (code, _, err1) = Hardening.RunCaptureEx("sudo", ["-n", "--", exe, .. args]);
+            var (code, _, err1) = Hardening.RunCaptureEx(sudo, ["-n", "--", exe, .. args]);
             if (code == 0) return;
             childErr = err1;
         }
@@ -267,7 +271,7 @@ public static class SecureFile
         if (!Console.IsInputRedirected && Hardening.IsTrustedBinaryPath(exe, requireRootOwner: true))
         {
             Console.Error.WriteLine("hpass: 即将请求 sudo 密码以安装 vault 变更（仅搬运密文，目标为上述 vault 文件）");
-            var (code2, _, err2) = Hardening.RunCaptureEx("sudo", ["--", exe, .. args], timeoutMs: 300_000);
+            var (code2, _, err2) = Hardening.RunCaptureEx(sudo, ["--", exe, .. args], timeoutMs: 300_000);
             if (code2 == 0) return;
             childErr ??= err2;
         }

@@ -34,6 +34,86 @@ public static class Hardening
     [System.Runtime.InteropServices.DllImport("libc", SetLastError = true)]
     private static extern int open(string path, int flags);
 
+    [System.Runtime.InteropServices.DllImport("libc", SetLastError = true)]
+    private static extern int fchown(int fd, uint owner, uint group);
+
+    [System.Runtime.InteropServices.DllImport("libc", SetLastError = true)]
+    private static extern int fchmod(int fd, uint mode);
+
+    [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+    private struct GroupStruct
+    {
+        public IntPtr gr_name;
+        public IntPtr gr_passwd;
+        public uint gr_gid;
+        public IntPtr gr_mem;
+    }
+
+    [System.Runtime.InteropServices.DllImport("libc", SetLastError = true)]
+    private static extern IntPtr getgrnam(string name);
+
+    /// <summary>组名 → gid（失败 -1）。</summary>
+    public static int GroupGid(string name)
+    {
+        var ptr = getgrnam(name);
+        return ptr == IntPtr.Zero ? -1 : (int)System.Runtime.InteropServices.Marshal.PtrToStructure<GroupStruct>(ptr).gr_gid;
+    }
+
+    /// <summary>
+    /// sudo 绝对路径：裸名 "sudo" 经 execvp 沿用户可控 PATH 解析，攻击者植入假 sudo 可收割
+    /// 口令（hpass 先打印信任背书文案再 exec 假 sudo）或伪造 exit 0 假成功。找不到 → null（调用方降级手动指引）。
+    /// </summary>
+    public static string? SudoPath() =>
+        File.Exists("/usr/bin/sudo") ? "/usr/bin/sudo"
+        : File.Exists("/bin/sudo") ? "/bin/sudo"
+        : File.Exists("/usr/local/bin/sudo") ? "/usr/local/bin/sudo"
+        : null;
+
+    /// <summary>
+    /// fd-based 特权施权（root 核心）：open → 同一性复核（fd 真实路径==目标路径，防链接偷换）→
+    /// fchown(root,gid) + fchmod。作用于 fd 锁定的 inode，永不被符号链接重定向——替代跟随链接的
+    /// 按路径 chown/chmod（后者在"检查→执行"窗口内被换链可把任意文件过户/改权 = 提权，Docker 实证）。
+    /// modeOctal 形如 0m440 的十进制值（0440=288, 0444=292）。
+    /// </summary>
+    public static void ApplyRootPermsFd(string path, string? group, bool member)
+    {
+        const int oRdonly = 0;
+        var oNoFollow = OperatingSystem.IsMacOS() ? 0x0100 : 0x20000;
+        var fd = open(path, oRdonly | oNoFollow);
+        if (fd < 0)
+            throw new VaultException($"无法打开目标执行特权施权（可能被替换为符号链接）：{path}");
+        try
+        {
+            var fdLink = OperatingSystem.IsLinux() ? $"/proc/self/fd/{fd}" : $"/dev/fd/{fd}";
+            var resolved = File.ResolveLinkTarget(fdLink, returnFinalTarget: false)?.FullName;
+            if (resolved is not null && !SameFile(resolved, path))
+                throw new VaultException($"安全限制：目标在施权瞬间被替换（fd 指向与路径不一致）：{path}");
+            var gid = -1;
+            if (group is not null)
+            {
+                gid = GroupGid(group);
+                if (gid < 0) group = null;   // 组解析失败 → 仅 root 属主
+            }
+            if (fchown(fd, 0, gid < 0 ? 0 : (uint)gid) != 0)
+                throw new VaultException($"fchown 失败（errno {System.Runtime.InteropServices.Marshal.GetLastWin32Error()}）：{path}");
+            var mode = member ? 288u : 292u;   // 0440 / 0444
+            if (fchmod(fd, mode) != 0)
+                throw new VaultException($"fchmod 失败（errno {System.Runtime.InteropServices.Marshal.GetLastWin32Error()}）：{path}");
+        }
+        finally
+        {
+            close(fd);
+        }
+    }
+
+    /// <summary>fd 解析路径与传入路径的同一性（双侧 final-target 解析，兼容符号链接祖先如 /tmp→/private/tmp）。</summary>
+    private static bool SameFile(string resolvedRealPath, string path)
+    {
+        var a = resolvedRealPath.EndsWith(" (deleted)") ? "" : resolvedRealPath;
+        var b = File.ResolveLinkTarget(path, returnFinalTarget: true)?.FullName ?? Path.GetFullPath(path);
+        return string.Equals(a, b, StringComparison.Ordinal);
+    }
+
     /// <summary>
     /// fd-based 安全读取：open 后经 /proc/self/fd/&lt;fd&gt; 对**已打开的 inode** 复核属主/大小再读。
     /// 消除"路径检查→按路径读"的 check-then-use 竞态（同 UID 攻击者在窗口内把 staging 换成指向
@@ -59,9 +139,9 @@ public static class Hardening
             // macOS 依赖 O_NOFOLLOW（实测生效）+ fd 读取本身；Linux 走路径同一性复核。
             var realPath = resolved ?? path;
             // 路径同一性（不依赖 SUDO_USER，覆盖 root 直接运行场景）：fd 解析出的真实路径必须就是
-            // staging 路径本身——窗口内被换成指向 root 专属文件的链接时，解析结果≠staging → 拒绝；
-            // 被 unlink 后 readlink 返回 "path (deleted)" 同样≠path → fail-closed
-            if (resolved is not null && !string.Equals(NormalizePath(realPath), NormalizePath(path), StringComparison.Ordinal))
+            // staging 路径本身（双侧 final-target 解析，兼容符号链接祖先）；被换成指向 root 专属文件
+            // 的链接、或被 unlink（readlink 带 " (deleted)" 标记）→ 一律 fail-closed 拒绝
+            if (resolved is not null && (!SameFile(resolved, path) || resolved.EndsWith(" (deleted)")))
                 throw new VaultException("安全限制：暂存文件在打开瞬间被替换（fd 指向与路径不一致），拒绝安装");
             var info = new FileInfo(realPath);
             if (expectedOwnerUid >= 0 && FileOwnerUid(realPath) != expectedOwnerUid)
@@ -297,20 +377,19 @@ public static class Hardening
         if (IsSymbolicLink(home)) throw new VaultException($"特权操作后 {home} 变成了符号链接，已中止（可能的提权攻击）");
     }
 
-    /// <summary>仅 chown/chmod（不设不可变）——供"rename 前对新文件先行确权"使用；不可变必须在 rename 之后。</summary>
+    /// <summary>仅 chown/chmod（不设不可变）——供"rename 前对新文件先行确权"使用；不可变必须在 rename 之后。
+    /// fd-based（fchown/fchmod 作用于锁定的 inode + 同一性复核）：按路径 chown/chmod 会跟随符号链接，
+    /// 检查与执行窗口内被换链可把任意文件过户/改权（Docker 实证提权）。</summary>
     public static void ApplyRootOwnershipOnly(string path)
     {
         if (IsSymbolicLink(path)) throw new VaultException($"拒绝对符号链接执行特权操作：{path}（可能的提权攻击）");
         if (RealSudoUser() is null)
         {
-            // root 直接运行（su/root-shell）：无真实用户可对齐——不改属主，444 保住"只可整体覆盖"且用户仍可读
-            Sh($"chmod 444 {Q(path)}", check: true);
+            ApplyRootPermsFd(path, group: null, member: false);   // root 直接运行：不改组对齐，444
             return;
         }
         var (group, member) = RootGroup();
-        var grp = group ?? (OperatingSystem.IsMacOS() ? "wheel" : "root");
-        var mode = member ? "440" : "444";
-        Sh($"chown root:{grp} {Q(path)} && chmod {mode} {Q(path)}", check: true);
+        ApplyRootPermsFd(path, group ?? (OperatingSystem.IsMacOS() ? "wheel" : "root"), member);
     }
 
     public static void ApplyRootFilePerms(string path)
@@ -319,14 +398,12 @@ public static class Hardening
         if (RealSudoUser() is null)
         {
             // root 直接运行：不改属主（用户仍可读），444 + 不可变已构成"只可整体覆盖"保护
-            Sh($"chmod 444 {Q(path)}", check: true);
+            ApplyRootPermsFd(path, group: null, member: false);
             _ = SetImmutable(path);
             return;
         }
         var (group, member) = RootGroup();
-        var grp = group ?? (OperatingSystem.IsMacOS() ? "wheel" : "root");
-        var mode = member ? "440" : "444";
-        Sh($"chown root:{grp} {Q(path)} && chmod {mode} {Q(path)}", check: true);
+        ApplyRootPermsFd(path, group ?? (OperatingSystem.IsMacOS() ? "wheel" : "root"), member);
         SetImmutable(path);
         if (IsSymbolicLink(path)) throw new VaultException($"特权操作后 {path} 变成了符号链接，已中止（可能的提权攻击）");
     }
@@ -421,8 +498,6 @@ public static class Hardening
         var u = Environment.GetEnvironmentVariable("SUDO_USER");
         return string.IsNullOrEmpty(u) || u == "root" ? null : u;
     }
-
-    private static string NormalizePath(string p) => p.Replace(" (deleted)", "").TrimEnd('/');
 
     public static string Q(string p) => "'" + p.Replace("'", "'\\''") + "'";
 
