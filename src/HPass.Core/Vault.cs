@@ -306,6 +306,10 @@ public sealed class Vault : IDisposable
     private static void ApplyDirectoryPermissions(string dir)
     {
         if (!OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS()) return;
+        // 符号链接拒绝：root 运行（rotate/EnsureDirectory 等）时 chmod 会跟随链接作用于任意目录
+        // （Docker 实证可把 /etc 等改成 700）；用户态同样是异常状态，fail-closed
+        if (Hardening.IsSymbolicLink(dir))
+            throw new VaultException($"目录是符号链接（可能的攻击或残留），拒绝操作：{dir}");
         try
         {
             File.SetUnixFileMode(dir, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);

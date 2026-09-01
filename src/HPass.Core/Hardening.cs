@@ -54,7 +54,15 @@ public static class Hardening
             // 得到真实路径后复核属主/大小。即使 open 跟随了被换入的链接，属主复核仍会拒绝。
             // 注意 FileOwnerUid 经 shell 执行，不能用 /proc/self（那是 shell 的），必须用解析出的普通路径。
             var fdLink = OperatingSystem.IsLinux() ? $"/proc/self/fd/{fd}" : $"/dev/fd/{fd}";
-            var realPath = File.ResolveLinkTarget(fdLink, returnFinalTarget: false)?.FullName ?? path;
+            var resolved = File.ResolveLinkTarget(fdLink, returnFinalTarget: false)?.FullName;
+            // 注：Darwin 的 /dev/fd/N 非符号链接（readlink EINVAL）→ resolved=null，
+            // macOS 依赖 O_NOFOLLOW（实测生效）+ fd 读取本身；Linux 走路径同一性复核。
+            var realPath = resolved ?? path;
+            // 路径同一性（不依赖 SUDO_USER，覆盖 root 直接运行场景）：fd 解析出的真实路径必须就是
+            // staging 路径本身——窗口内被换成指向 root 专属文件的链接时，解析结果≠staging → 拒绝；
+            // 被 unlink 后 readlink 返回 "path (deleted)" 同样≠path → fail-closed
+            if (resolved is not null && !string.Equals(NormalizePath(realPath), NormalizePath(path), StringComparison.Ordinal))
+                throw new VaultException("安全限制：暂存文件在打开瞬间被替换（fd 指向与路径不一致），拒绝安装");
             var info = new FileInfo(realPath);
             if (expectedOwnerUid >= 0 && FileOwnerUid(realPath) != expectedOwnerUid)
                 throw new VaultException("安全限制：暂存文件在打开瞬间被替换（属主与校验时不一致），拒绝安装");
@@ -344,13 +352,19 @@ public static class Hardening
     /// </summary>
     public static int CleanStaging(string home, int minAgeSeconds = 60)
     {
-        var dir = Path.Combine(home, "run", "staging");
+        var runDir = Path.Combine(home, "run");
+        var dir = Path.Combine(runDir, "staging");
+        // run/ 或 staging/ 是符号链接 → 拒绝清理：root 运行 doctor 时可被重定向为
+        // "root 删除任意目录文件"（Docker 实证）；用户态同样是异常状态，统一 fail-closed
+        if (IsSymbolicLink(runDir) || IsSymbolicLink(dir))
+            throw new VaultException($"run/staging 是符号链接（可能的攻击或残留），拒绝清理：{dir}");
         if (!Directory.Exists(dir)) return 0;
         var count = 0;
         foreach (var f in Directory.EnumerateFiles(dir))
         {
             try
             {
+                if (IsSymbolicLink(f)) continue;   // 链接项不删除（防经 EnumerateFiles 跟随列举出的目标侧效应）
                 if ((DateTime.UtcNow - File.GetLastWriteTimeUtc(f)).TotalSeconds < minAgeSeconds) continue;
                 File.Delete(f);
                 count++;
@@ -407,6 +421,8 @@ public static class Hardening
         var u = Environment.GetEnvironmentVariable("SUDO_USER");
         return string.IsNullOrEmpty(u) || u == "root" ? null : u;
     }
+
+    private static string NormalizePath(string p) => p.Replace(" (deleted)", "").TrimEnd('/');
 
     public static string Q(string p) => "'" + p.Replace("'", "'\\''") + "'";
 

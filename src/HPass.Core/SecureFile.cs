@@ -143,7 +143,11 @@ public static class SecureFile
         var expectedOwner = -1;
         var sudoUser = Environment.GetEnvironmentVariable("SUDO_USER");
         if (Hardening.IsRoot() && !string.IsNullOrEmpty(sudoUser))
+        {
             expectedOwner = Hardening.UserIdOf(sudoUser);
+            if (expectedOwner < 0)
+                throw new VaultException($"安全限制：无法解析调用用户（{sudoUser}）的 uid，拒绝安装（fail-closed）");
+        }
         var content = Hardening.ReadStagedFdBased(stagingPath, expectedOwner);
         if (content.Length > MaxStagedBytes)
             throw new VaultException($"暂存文件过大（{content.Length} > {MaxStagedBytes} 字节），拒绝安装");
