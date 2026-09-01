@@ -124,6 +124,10 @@ public static class ShellLauncher
                     if (OperatingSystem.IsWindows() && scriptShellName is "powershell" or "powershell.exe")
                         // 5.1 对重定向 stdin 按 OEM 代码页解码：非 ASCII 密文被改写 → 脱敏失配（I3 绕过面）
                         throw new UsageException("Windows PowerShell 5.1 的 stdin 按 OEM 代码页解码，会改写非 ASCII 密文导致脱敏失配——请安装 pwsh 7+（--shell pwsh）");
+                    // pwsh 7 脚本模式：对原生子进程输出的解码取 [Console]::OutputEncoding（OEM 默认）——
+                    // UTF-8 输出的非 ASCII 密文会被错误转码，前置强制 UTF-8（与命令模式一致）
+                    if (OperatingSystem.IsWindows())
+                        script = "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8\n" + script;
                     psi.FileName = shell;
                     psi.ArgumentList.Add("-NoProfile");
                     psi.ArgumentList.Add("-Command");
@@ -169,10 +173,10 @@ public static class ShellLauncher
             // Windows PowerShell 5.1 对重定向输出用 OEM/ANSI 代码页编码——非 ASCII 密文的字节形态会
             // 与 UTF-8 脱敏规则失配（I3 绕过）。前置强制 UTF-8 输出（pwsh 7 默认 UTF-8，无副作用）
             var prelude = OperatingSystem.IsWindows() ? "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; " : "";
-            var line = prelude + string.Join(' ', quoted);
-            // 引号包裹的命令名在 pwsh -Command 里是字符串表达式而非调用——需要调用运算符 &
-            if (quoted[0].StartsWith('\'')) line = "& " + line;
-            psi.ArgumentList.Add(line);
+            // & 调用运算符必须在 prelude 之后（"& [赋值语句]" 是 ParserError）：正确形态 "prelude; & 'cmd' args"
+            var line = prelude + (quoted[0].StartsWith('\'') ? "& " : "") + string.Join(' ', quoted);
+            // pwsh -Command 退出码由最后语句决定（外部命令非 0/1 折叠为 1）——追加 exit 透传
+            psi.ArgumentList.Add(line + "; exit $LASTEXITCODE");
         }
         else
         {
