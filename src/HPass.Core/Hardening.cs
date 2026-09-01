@@ -44,15 +44,17 @@ public static class Hardening
     public static byte[] ReadStagedFdBased(string path, int expectedOwnerUid)
     {
         const int oRdonly = 0;
-        var oNoFollow = OperatingSystem.IsMacOS() ? 0x0100 : 0x20000;
+        var oNoFollow = OperatingSystem.IsMacOS() ? 0x0100 : 0x20000;   // 两平台常量均经实测验证
         var fd = open(path, oRdonly | oNoFollow);
         if (fd < 0)
             throw new VaultException($"无法打开暂存文件（可能被替换或为符号链接）：{path}");
         try
         {
-            // 在 hpass 进程内解析 fd 链接得到真实路径（/proc/self 指向 hpass 自身），
-            // 再对普通路径查属主——FileOwnerUid 经 shell 执行，其 /proc/self 会指向 shell 而非本进程
-            var realPath = File.ResolveLinkTarget($"/proc/self/fd/{fd}", returnFinalTarget: false)?.FullName ?? path;
+            // fd 已锁定 inode：在 hpass 进程内解析 fd 链接（Linux=/proc/self/fd/N，Darwin=/dev/fd/N）
+            // 得到真实路径后复核属主/大小。即使 open 跟随了被换入的链接，属主复核仍会拒绝。
+            // 注意 FileOwnerUid 经 shell 执行，不能用 /proc/self（那是 shell 的），必须用解析出的普通路径。
+            var fdLink = OperatingSystem.IsLinux() ? $"/proc/self/fd/{fd}" : $"/dev/fd/{fd}";
+            var realPath = File.ResolveLinkTarget(fdLink, returnFinalTarget: false)?.FullName ?? path;
             var info = new FileInfo(realPath);
             if (expectedOwnerUid >= 0 && FileOwnerUid(realPath) != expectedOwnerUid)
                 throw new VaultException("安全限制：暂存文件在打开瞬间被替换（属主与校验时不一致），拒绝安装");
@@ -61,12 +63,18 @@ public static class Hardening
             using var fs = new FileStream(new Microsoft.Win32.SafeHandles.SafeFileHandle((IntPtr)fd, ownsHandle: false),
                 FileAccess.Read);
             using var ms = new MemoryStream();
-            fs.CopyTo(ms);
+            var buf = new byte[64 * 1024];
+            int n;
+            while ((n = fs.Read(buf, 0, buf.Length)) > 0)
+            {
+                ms.Write(buf, 0, n);
+                if (ms.Length > 8 * 1024 * 1024)   // 读入中强制上限（防 FIFO/持续追加的无限读）
+                    throw new VaultException("暂存文件超出大小上限，拒绝安装");
+            }
             return ms.ToArray();
         }
         finally
         {
-            _ = System.Runtime.InteropServices.Marshal.GetLastWin32Error(); // no-op 触达
             close(fd);
         }
     }

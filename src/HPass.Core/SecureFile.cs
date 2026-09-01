@@ -137,24 +137,14 @@ public static class SecureFile
     /// <summary>读入暂存内容并验证结构合法（按最终文件名选类型），root 只安装"结构合法的密文"。</summary>
     private static byte[] ReadAndValidateStaged(string stagingPath, string finalPath)
     {
-        byte[] content;
-        if (OperatingSystem.IsLinux())
-        {
-            // fd-based 读取（root 场景的命门）：open 后基于已锁定 inode 复核属主/大小，再从 fd 读入——
-            // 窗口内把 staging 换成指向 root 专属文件的链接也会被属主复核拒绝（跨特权读取闭环）
-            var expectedOwner = -1;
-            var sudoUser = Environment.GetEnvironmentVariable("SUDO_USER");
-            if (Hardening.IsRoot() && !string.IsNullOrEmpty(sudoUser))
-                expectedOwner = Hardening.UserIdOf(sudoUser);
-            content = Hardening.ReadStagedFdBased(stagingPath, expectedOwner);
-        }
-        else
-        {
-            var pre = new FileInfo(stagingPath).Length;     // 读前预检：防超大文件先全量载入 root 内存
-            if (pre > MaxStagedBytes)
-                throw new VaultException($"暂存文件过大（{pre} > {MaxStagedBytes} 字节），拒绝安装");
-            content = File.ReadAllBytes(stagingPath);       // macOS：open 前 LinkTarget 拒绝 + O_NOFOLLOW（实测生效）
-        }
+        // fd-based 读取（root 场景的命门，全 Unix 平台）：open(O_NOFOLLOW) 后基于已锁定 inode
+        // （Linux=/proc/self/fd/N、Darwin=/dev/fd/N）复核属主/大小，再从 fd 读入——窗口内把 staging
+        // 换成指向 root 专属文件的链接也会被属主复核拒绝（跨特权读取闭环）
+        var expectedOwner = -1;
+        var sudoUser = Environment.GetEnvironmentVariable("SUDO_USER");
+        if (Hardening.IsRoot() && !string.IsNullOrEmpty(sudoUser))
+            expectedOwner = Hardening.UserIdOf(sudoUser);
+        var content = Hardening.ReadStagedFdBased(stagingPath, expectedOwner);
         if (content.Length > MaxStagedBytes)
             throw new VaultException($"暂存文件过大（{content.Length} > {MaxStagedBytes} 字节），拒绝安装");
         var name = Path.GetFileName(finalPath);
