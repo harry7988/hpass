@@ -27,6 +27,18 @@ public class VaultTests : IDisposable
     }
 
     [Fact]
+    public void Create_MasterKeyUsesStrongIterations_AndRunDirTight()
+    {
+        using var _ = Vault.Create(_home.Dir, "correct horse battery");
+        var master = JsonSerializer.Deserialize<MasterKeyFile>(File.ReadAllText(Path.Combine(_home.Dir, "master.key")), HPassJsonContext.Default.MasterKeyFile)!;
+        Assert.Equal(Crypto.Pbkdf2Iterations, master.Kdf.Iterations);
+        Assert.True(master.Kdf.Iterations >= 600_000, "PBKDF2 迭代不得低于 OWASP 现行推荐");
+        if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS())
+            Assert.Equal(UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute,
+                File.GetUnixFileMode(Path.Combine(_home.Dir, "run")));
+    }
+
+    [Fact]
     public void Create_WritesFilesWithTightPermissions()
     {
         using var _ = Vault.Create(_home.Dir, "correct horse battery");

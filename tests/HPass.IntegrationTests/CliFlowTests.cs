@@ -100,7 +100,7 @@ public class CliFlowTests
         {
             var (exit, _, _) = F.RunWithInput(newPw, "set", "db", "--password-stdin");
             Assert.Equal(0, exit);
-            var (execExit, stdout, _) = F.Run("exec", "--",
+            var (execExit, stdout, _) = F.Run("exec", "--allow-echo", "--",
                 "/bin/sh", "-c", $"[ \"{{{{db}}}}\" = \"{newPw}\" ] && echo MATCH");
             Assert.Equal(0, execExit);
             Assert.Contains("MATCH", stdout);
@@ -192,7 +192,7 @@ public class CliFlowTests
     public void Exec_EnvInjection_SecretNotInArgv_RedactedInOutput()
     {
         if (!Unix) return;
-        var (exit, stdout, _) = F.RunAs("init-pass-123", "exec", "--env", "db:HPASS_IT_V", "--",
+        var (exit, stdout, _) = F.RunAs("init-pass-123", "exec", "--allow-echo", "--env", "db:HPASS_IT_V", "--",
             "/bin/sh", "-c", "printf '%s' \"$HPASS_IT_V\"");
         Assert.Equal(0, exit);
         Assert.Equal("{{db}}", stdout);
@@ -352,9 +352,9 @@ public class CliFlowTests
         var (exit, stdout, _) = F.Run("doctor");
         Assert.Equal(0, exit);
         if (OperatingSystem.IsWindows())
-            Assert.Contains("auto → pwsh", stdout);
+            Assert.Contains("pwsh", stdout);
         else
-            Assert.Matches(new System.Text.RegularExpressions.Regex("auto → (bash|sh|zsh)"), stdout);
+            Assert.Matches(new System.Text.RegularExpressions.Regex(@"auto → \S*(bash|sh|zsh)"), stdout);
     }
 
     [Fact]
@@ -543,6 +543,294 @@ public class CliFlowTests
             Assert.DoesNotContain("aaaaaaaa1", stderr);
         }
         finally { F.Run("delete", "noisy"); }
+    }
+
+    [Fact]
+    public void Exec_SecondDoubleDash_PreservedInCommand()
+    {
+        if (!Unix) return;
+        // 首个 -- 是分隔符；命令自身的 --（git log -- path 等）必须原样保留
+        var (exit, stdout, _) = F.Run("exec", "--", "/bin/echo", "--", "marker={{db.user}}");
+        Assert.Equal(0, exit);
+        Assert.Equal("-- marker=root\n", stdout);
+    }
+
+    [Fact]
+    public void Exec_OptionsAfterPositional_NotHijacked()
+    {
+        if (!Unix) return;
+        // exec /bin/echo -f x：-f 属于 echo，不得被 hpass 当作脚本选项劫持
+        var (exit, stdout, stderr) = F.Run("exec", "/bin/echo", "-f", "x-{{db.user}}");
+        Assert.Equal(0, exit);
+        Assert.Equal("-f x-root\n", stdout);
+        Assert.DoesNotContain("脚本不存在", stderr);
+    }
+
+    [Fact]
+    public void Exec_HomeNotHijackedInsideCommand()
+    {
+        if (!Unix) return;
+        // hpass exec -- /bin/echo --home X：命令自己的 --home 不得被全局扫描剥离
+        var (exit, stdout, _) = F.Run("exec", "--", "/bin/echo", "--home", "GPGHOME");
+        Assert.Equal(0, exit);
+        Assert.Equal("--home GPGHOME\n", stdout);
+    }
+
+    [Fact]
+    public void Exec_EnvInjectionActivatingRedaction_WithEcho_ProbeRefused()
+    {
+        if (!Unix) return;
+        // --env 激活脱敏规则 + echo 候选 = 字典探测 oracle（第 2 轮评审发现的绕过），必须拒绝
+        var (exit, _, stderr) = F.Run("exec", "--env", "db:HPASS_PROBE_V", "--", "/bin/echo", "swordfish");
+        Assert.Equal(ExitCodes.Usage, exit);
+        Assert.Contains("--allow-echo", stderr);
+        // 放行后：候选≠密码则原样输出（等值 oracle 的输出面由 --allow-echo 交给人工确认）
+        var (exit2, stdout2, _) = F.RunAs("init-pass-123", "exec", "--allow-echo", "--env", "db:HPASS_PROBE_V", "--", "/bin/echo", "swordfish");
+        Assert.Equal(0, exit2);
+        Assert.Equal("swordfish\n", stdout2);
+    }
+
+    [Fact]
+    public void Exec_EnvReservedVariable_Rejected()
+    {
+        if (!Unix) return;
+        var (exit, _, stderr) = F.Run("exec", "--env", "db:HPASS_PASSPHRASE", "--", "/bin/echo", "x");
+        Assert.Equal(ExitCodes.Usage, exit);
+        Assert.Contains("保留变量", stderr);
+    }
+
+    [Fact]
+    public void Exec_UnknownOptionBeforeCommand_Rejected()
+    {
+        if (!Unix) return;
+        var (exit, _, stderr) = F.Run("exec", "--tmeout", "5", "--", "/bin/echo", "x");
+        Assert.Equal(ExitCodes.Usage, exit);
+        Assert.Contains("未知的 hpass 选项", stderr);
+    }
+
+    [Fact]
+    public void Doctor_ReportsInterruptedRootInstallResidue()
+    {
+        if (!Unix) return;
+        var home = Path.Combine(Path.GetTempPath(), "hpass-it-orig-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            Environment.SetEnvironmentVariable("HPASS_PASSPHRASE", "init-pass-123");
+            Assert.Equal(0, F.RunIn(home, null, "init", "--no-harden").Exit);
+            Environment.SetEnvironmentVariable("HPASS_PASSPHRASE", null);
+            File.WriteAllText(Path.Combine(home, "vault.json.hpass-orig-abc"), "old-vault-bytes");
+            var (exit, stdout, _) = F.RunIn(home, null, "doctor");
+            Assert.Equal(0, exit);
+            Assert.Contains("安装残留", stdout);
+            Assert.Contains("hpass-orig-abc", stdout);
+            Assert.True(File.Exists(Path.Combine(home, "vault.json.hpass-orig-abc")), "orig 是旧库唯一副本，doctor 不得删除");
+        }
+        finally
+        {
+            Hardening.ClearImmutable(Path.Combine(home, "vault.json"));
+            Hardening.ClearImmutable(Path.Combine(home, "master.key"));
+            try { Directory.Delete(home, true); } catch { }
+        }
+    }
+
+    [Fact]
+    public void Exec_MissingCommand_FailsFast_BeforePassphrase()
+    {
+        if (!Unix) return;
+        var (exit, _, stderr) = F.Run("exec");   // 无口令环境：用法错误应先于口令需求
+        Assert.Equal(ExitCodes.Usage, exit);
+        Assert.Contains("缺少要执行的命令", stderr);
+    }
+
+    [Fact]
+    public void Exec_ScriptAndCommand_MutuallyExclusive()
+    {
+        if (!Unix) return;
+        var script = Path.Combine(Path.GetTempPath(), "hpass-mx-" + Guid.NewGuid().ToString("N") + ".sh");
+        File.WriteAllText(script, "echo ok\n");
+        try
+        {
+            var (exit, _, stderr) = F.Run("exec", "-f", script, "--", "/bin/echo", "extra");
+            Assert.Equal(ExitCodes.Usage, exit);
+            Assert.Contains("不能同时", stderr);
+        }
+        finally { File.Delete(script); }
+    }
+
+    [Fact]
+    public void Exec_EnvVarNameValidated()
+    {
+        if (!Unix) return;
+        var (exit, _, stderr) = F.Run("exec", "--env", "db:A=B", "--", "/bin/echo", "x");
+        Assert.Equal(ExitCodes.Usage, exit);
+        Assert.Contains("环境变量名非法", stderr);
+    }
+
+    [Fact]
+    public void Exec_LargeTimeout_NoOverflow()
+    {
+        if (!Unix) return;
+        var (exit, stdout, _) = F.Run("exec", "--timeout", "2147484", "--", "/bin/echo", "ok-{{db.user}}");
+        Assert.Equal(0, exit);
+        Assert.Equal("ok-root\n", stdout);
+    }
+
+    [Fact]
+    public void Exec_StartFailure_FixedMessage_NoSecretLeak()
+    {
+        if (!Unix) return;
+        // none 模式把密文解析为命令名：启动失败消息不得携带密文（I5）
+        var (exit, _, stderr) = F.RunAs("init-pass-123", "exec", "--shell", "none", "--", "{{db}}");
+        Assert.Equal(ExitCodes.Usage, exit);
+        Assert.Contains("无法启动子进程", stderr);
+        Assert.DoesNotContain(CliFixture.DbPassword, stderr);
+    }
+
+    [Fact]
+    public void Set_EmptyPasswordAndFieldValue_Rejected()
+    {
+        if (!Unix) return;
+        var (exit, _, stderr) = F.RunAsWithInput("init-pass-123", "", "set", "empty1", "--password-stdin");
+        Assert.Equal(ExitCodes.Usage, exit);
+        // 空密码经 --password-stdin 会被"未读到密码"校验先拦（同为用法错误）；-f note= 的空值走"不能为空"
+        Assert.True(stderr.Contains("不能为空") || stderr.Contains("未从 stdin 读到密码"), $"实际: {stderr}");
+        var (exit2, _, _) = F.RunAsWithInput("init-pass-123", "Str0ng-Pass-9x", "set", "empty2", "-f", "note=", "--password-stdin");
+        Assert.Equal(ExitCodes.Usage, exit2);
+    }
+
+    [Fact]
+    public void Rotate_CreatesRecoveryBackup()
+    {
+        if (!Unix) return;
+        var vaultPath = Path.Combine(F.Home, "vault.json");
+        var keyPath = Path.Combine(F.Home, "master.key");
+        var vaultBefore = File.ReadAllText(vaultPath);
+        var keyBefore = File.ReadAllText(keyPath);
+        try
+        {
+            Assert.Equal(0, F.RunAs("init-pass-123", "rotate").Exit);
+            Assert.True(File.Exists(Path.Combine(F.Home, "run", "rotate-backup.vault.json")), "rotate 前必须备份 vault.json");
+            Assert.True(File.Exists(Path.Combine(F.Home, "run", "rotate-backup.master.key")), "rotate 前必须备份 master.key");
+            var (execExit, stdout, _) = F.RunAs("init-pass-123", "exec", "--allow-echo", "--", "/bin/echo", "{{db}}");
+            Assert.Equal(0, execExit);
+            Assert.Equal("{{db}}\n", stdout);
+        }
+        finally
+        {
+            File.WriteAllText(vaultPath, vaultBefore);
+            File.WriteAllText(keyPath, keyBefore);
+        }
+    }
+
+    [Fact]
+    public void PassphraseFile_LoosePermissions_Warned()
+    {
+        if (!Unix) return;
+        var home = Path.Combine(Path.GetTempPath(), "hpass-it-loose-" + Guid.NewGuid().ToString("N"));
+        var pwFile = Path.Combine(Path.GetTempPath(), "hpass-pw-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            File.WriteAllText(pwFile, "loose-pass-123\n");
+            File.SetUnixFileMode(pwFile, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.GroupRead | UnixFileMode.OtherRead);
+            Environment.SetEnvironmentVariable("HPASS_PASSPHRASE_FILE", pwFile);
+            var (exit, _, stderr) = F.RunIn(home, null, "init", "--no-harden");
+            Assert.Equal(0, exit);
+            Assert.Contains("可读", stderr);
+            Assert.Contains("chmod 600", stderr);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("HPASS_PASSPHRASE_FILE", null);
+            File.Delete(pwFile);
+            try { Directory.Delete(home, true); } catch { }
+        }
+    }
+
+    [Fact]
+    public void Exec_ChildEnv_HasNoPassphrase()
+    {
+        if (!Unix) return;
+        // 主口令不得透传给子进程（printenv/env 即可泄露，且口令不在脱敏规则内）
+        var (exit, stdout, _) = F.RunAs("init-pass-123", "exec", "--",
+            "/bin/sh", "-c", "echo \"[$HPASS_PASSPHRASE][$HPASS_PASSPHRASE_FILE]\"");
+        Assert.Equal(0, exit);
+        Assert.Equal("[][]\n", stdout);
+    }
+
+    [Fact]
+    public void InstallStagedCmd_RejectsSymlinks()
+    {
+        if (!Unix) return;
+        var home = Path.Combine(Path.GetTempPath(), "hpass-it-symlink-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            Environment.SetEnvironmentVariable("HPASS_PASSPHRASE", "init-pass-123");
+            Assert.Equal(0, F.RunIn(home, null, "init", "--no-harden").Exit);
+            Environment.SetEnvironmentVariable("HPASS_PASSPHRASE", null);
+
+            var vaultPath = Path.Combine(home, "vault.json");
+            var sentinel = Path.Combine(Path.GetTempPath(), "hpass-sentinel-" + Guid.NewGuid().ToString("N"));
+            File.WriteAllText(sentinel, "sentinel-content");
+
+            var stagingDir = Path.Combine(home, "run", "staging");
+            Directory.CreateDirectory(stagingDir);
+
+            // 1) 目标是符号链接（指向外部文件）：拒绝，外部文件不得被 root 操作波及
+            var backup = File.ReadAllBytes(vaultPath);
+            File.Delete(vaultPath);
+            File.CreateSymbolicLink(vaultPath, sentinel);
+            var staged = Path.Combine(stagingDir, "vault.json.x1");
+            File.WriteAllBytes(staged, "{}"u8.ToArray());
+            var (exit1, _, err1) = F.RunIn(home, null, "_install-staged", staged, vaultPath);
+            Assert.Equal(ExitCodes.Vault, exit1);
+            Assert.Contains("符号链接", err1);
+            Assert.Equal("sentinel-content", File.ReadAllText(sentinel));
+            File.Delete(vaultPath);
+            File.WriteAllBytes(vaultPath, backup);
+
+            // 2) 暂存是符号链接：拒绝
+            var outside = Path.Combine(Path.GetTempPath(), "hpass-outside-" + Guid.NewGuid().ToString("N"));
+            File.WriteAllText(outside, "{}");
+            var stagedLink = Path.Combine(stagingDir, "vault.json.x2");
+            File.CreateSymbolicLink(stagedLink, outside);
+            var (exit2, _, err2) = F.RunIn(home, null, "_install-staged", stagedLink, vaultPath);
+            Assert.Equal(ExitCodes.Vault, exit2);
+            Assert.Contains("符号链接", err2);
+            Assert.Equal("{}", File.ReadAllText(outside));
+
+            // 3) 正常安装不受影响（回归）
+            var good = Path.Combine(stagingDir, "vault.json.x3");
+            File.WriteAllBytes(good, "{}"u8.ToArray());
+            Assert.Equal(0, F.RunIn(home, null, "_install-staged", good, vaultPath).Exit);
+            File.Delete(vaultPath);
+            File.WriteAllBytes(vaultPath, backup);
+            File.Delete(outside);
+            File.Delete(sentinel);
+        }
+        finally
+        {
+            Hardening.ClearImmutable(Path.Combine(home, "vault.json"));
+            try { Directory.Delete(home, true); } catch { }
+        }
+    }
+
+    [Fact]
+    public void Init_PassphraseTooLong_Rejected()
+    {
+        if (!Unix) return;
+        var home = Path.Combine(Path.GetTempPath(), "hpass-it-longpw-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            Environment.SetEnvironmentVariable("HPASS_PASSPHRASE", new string('x', 2000));
+            var (exit, _, stderr) = F.RunIn(home, null, "init", "--no-harden");
+            Assert.Equal(ExitCodes.Vault, exit);
+            Assert.Contains("过长", stderr);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("HPASS_PASSPHRASE", null);
+            try { Directory.Delete(home, true); } catch { }
+        }
     }
 
     [Fact]

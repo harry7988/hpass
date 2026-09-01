@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.RegularExpressions;
 
 namespace HPass.Core;
@@ -29,10 +30,22 @@ public static partial class Placeholder
         return result;
     }
 
+    /// <summary>
+    /// 单遍替换：一次扫描所有占位符并拼接替换值，值中的 {{…}} 字面量不会被再次替换。
+    /// （多遍 Replace 存在注入：若条目 a 的值恰好含 "{{b}}"，会把 b 的密文二次注入且不参与脱敏。）
+    /// </summary>
     public static string Replace(string text, IReadOnlyDictionary<string, string> tokenValues)
     {
-        foreach (var (token, value) in tokenValues)
-            text = text.Replace(token, value);
-        return text;
+        if (tokenValues.Count == 0) return text;
+        var sb = new StringBuilder(text.Length);
+        var last = 0;
+        foreach (Match m in TokenRegex().Matches(text))
+        {
+            sb.Append(text.AsSpan(last, m.Index - last));
+            sb.Append(tokenValues.TryGetValue(m.Value, out var value) ? value : m.Value);
+            last = m.Index + m.Length;
+        }
+        sb.Append(text.AsSpan(last));
+        return sb.ToString();
     }
 }

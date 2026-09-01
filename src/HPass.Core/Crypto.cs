@@ -12,6 +12,8 @@ public static class Crypto
     public const int DekSize = 32;
     public const int SaltSize = 16;
     public const int RsaKeyBits = 3072;
+    /// <summary>OWASP 现行推荐的 PBKDF2-HMAC-SHA512 迭代下限；旧 vault 按各自存储值解（兼容）。</summary>
+    public const int Pbkdf2Iterations = 600_000;
 
     public static byte[] RandomBytes(int n) => RandomNumberGenerator.GetBytes(n);
 

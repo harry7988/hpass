@@ -86,11 +86,21 @@ public class HardeningTests : IDisposable
         var home = Path.Combine(_tmp, "home-clean");
         var staging = Path.Combine(home, "run", "staging");
         Directory.CreateDirectory(staging);
-        File.WriteAllText(Path.Combine(staging, "vault.json.aaa"), "ct");
-        File.WriteAllText(Path.Combine(staging, "vault.json.bbb"), "ct");
+        var a = Path.Combine(staging, "vault.json.aaa");
+        var b = Path.Combine(staging, "vault.json.bbb");
+        File.WriteAllText(a, "ct");
+        File.WriteAllText(b, "ct");
+        File.SetLastWriteTimeUtc(a, DateTime.UtcNow.AddMinutes(-5));
+        File.SetLastWriteTimeUtc(b, DateTime.UtcNow.AddMinutes(-5));
         Assert.Equal(2, Hardening.CleanStaging(home));
         Assert.Empty(Directory.GetFiles(staging));
         Assert.Equal(0, Hardening.CleanStaging(home));
+
+        // 60s 内的新鲜暂存不清理（可能是并发 set 正在等待提权搬运）
+        var fresh = Path.Combine(staging, "vault.json.fresh");
+        File.WriteAllText(fresh, "ct");
+        Assert.Equal(0, Hardening.CleanStaging(home));
+        Assert.True(File.Exists(fresh));
     }
 
     [Fact]

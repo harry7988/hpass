@@ -177,11 +177,108 @@ public class ShellLauncherTests : IDisposable
     }
 
     [Fact]
-    public void AutoShell_ResolvesOnUnix()
+    public void AutoShell_ResolvesToAbsolutePath_OnUnix()
     {
         if (!Unix) return;
         var shell = ShellLauncher.ResolveShell("auto");
-        Assert.True(shell is "bash" or "sh" or "zsh", $"unexpected: {shell}");
+        Assert.True(Path.IsPathRooted(shell), $"必须返回绝对路径（防 CWD 种植）：{shell}");
+        Assert.True(shell.Contains("bash") || shell.EndsWith("/sh") || shell.Contains("zsh"), $"unexpected: {shell}");
+    }
+
+    [Fact]
+    public void ResolveShell_RejectsRelativeCwdHit()
+    {
+        if (!Unix) return;
+        // 即使当前目录存在同名文件，也不能命中（Windows CreateProcess 会搜 CWD）
+        var shell = ShellLauncher.ResolveShell("bash");
+        Assert.True(Path.IsPathRooted(shell));
+        Assert.DoesNotContain(Directory.GetCurrentDirectory(), shell);
+    }
+
+    [Fact]
+    public void QuoteForPwsh_AlwaysQuotes_MetaCharacters()
+    {
+        Assert.Equal("'a`b'", ShellLauncher.QuoteForPwsh("a`b"));
+        Assert.Equal("'a,b'", ShellLauncher.QuoteForPwsh("a,b"));
+        Assert.Equal("'plain'", ShellLauncher.QuoteForPwsh("plain"));
+        Assert.Equal("''", ShellLauncher.QuoteForPwsh(""));
+        Assert.Equal("'it''s'", ShellLauncher.QuoteForPwsh("it's"));
+    }
+
+    [Fact]
+    public void ScriptMode_SecretValueWithCrlf_StillRedacted()
+    {
+        if (!Unix) return;
+        // 注入值本身含 \r\n：CRLF 归一必须发生在替换之前，子进程收到的值与脱敏规则保持同一
+        var values = new Dictionary<string, string> { ["{{v}}"] = "line1\r\nline2" };
+        var req = new ExecRequest
+        {
+            Args = [],
+            ScriptPath = "inline",
+            ScriptText = "printf '%s' '{{v}}'\n",
+            Shell = "sh",
+            TimeoutSeconds = 15,
+            Resolve = t => values[t],
+            RedactionRules = new Dictionary<string, string> { ["line1\r\nline2"] = "{{v}}" },
+        };
+        var (exit, output) = Run(req);
+        Assert.Equal(0, exit);
+        Assert.Equal("{{v}}", output);
+    }
+
+    [Fact]
+    public void ScriptMode_LargeScript_ChildNotReading_TimeoutStillWorks()
+    {
+        if (!Unix) return;
+        // 脚本 > 管道容量且子进程不读 stdin：同步写会永久挂死、--timeout 失效（第 2 轮修复的回归锚）
+        var big = "# x\n" + string.Concat(Enumerable.Repeat(new string('#', 1024) + "\n", 700));
+        var req = new ExecRequest
+        {
+            Args = [],
+            ScriptPath = "inline",
+            ScriptText = "exec sleep 30\n" + big,
+            Shell = "sh",
+            TimeoutSeconds = 2,
+            Resolve = _ => "unused",
+            RedactionRules = new Dictionary<string, string>(),
+        };
+        var start = DateTime.UtcNow;
+        var (exit, _) = Run(req);
+        Assert.Equal(ExitCodes.Timeout, exit);
+        Assert.True((DateTime.UtcNow - start).TotalSeconds < 20, "超时必须及时生效");
+    }
+
+    [Fact]
+    public void ScriptMode_CrlfNormalized_ForPosixShell()
+    {
+        if (!Unix) return;
+        var script = Path.Combine(_tmp, "crlf.sh");
+        File.WriteAllText(script, "#!/bin/sh\r\necho value={{db.user}}\r\n");
+        var (exit, output) = Run(Script(script, "sh"));
+        Assert.Equal(0, exit);
+        Assert.Equal("value=resolved-db-user\n", output);
+    }
+
+    [Fact]
+    public void StartFailure_FixedMessage_NoResolvedSecret()
+    {
+        if (!Unix) return;
+        // none 模式 argv[0] 为解析后的密文：启动失败的异常消息不得包含它（I5）
+        var req = new ExecRequest
+        {
+            Args = ["{{db}}"],
+            Shell = "none",
+            TimeoutSeconds = 10,
+            Resolve = _ => "StartFails-Secret-9",
+            RedactionRules = new Dictionary<string, string>(),
+        };
+        var ex = Assert.Throws<UsageException>(() =>
+        {
+            using var stdout = new MemoryStream();
+            using var stderr = new MemoryStream();
+            ShellLauncher.Run(req, stdout, stderr);
+        });
+        Assert.DoesNotContain("StartFails-Secret-9", ex.Message);
     }
 
     [Fact]

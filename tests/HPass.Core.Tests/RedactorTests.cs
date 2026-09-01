@@ -15,6 +15,16 @@ public class RedactorTests
     }
 
     [Fact]
+    public void EmptySecretRule_Filtered_NoInfiniteLoop()
+    {
+        // 空 secret 曾使 IndexOf 恒命中 0 → 死循环 OOM；构造时必须过滤
+        var redactor = new StreamRedactor(new Dictionary<string, string> { [""] = "{{x}}" });
+        var out1 = redactor.Process("normal output"u8);
+        var out2 = redactor.Flush();
+        Assert.Equal("normal output", Encoding.UTF8.GetString(out1.Concat(out2).ToArray()));
+    }
+
+    [Fact]
     public void NoRules_PassthroughExactBytes()
     {
         var redactor = new StreamRedactor(new Dictionary<string, string>());

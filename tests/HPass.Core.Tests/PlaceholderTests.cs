@@ -91,4 +91,20 @@ public class PlaceholderTests
         Assert.Equal("X-Y-X", Placeholder.Replace("{{a}}-{{b}}-{{a}}", map));
         Assert.Equal("--password=X", Placeholder.Replace("--password={{a}}", map));
     }
+
+    [Fact]
+    public void Replace_SinglePass_ValueContainingTokenIsNotReplaced()
+    {
+        // 条目 a 的值里含 "{{b}}" 字面量：单遍替换后保持字面，b 的密文绝不能被二次注入
+        var map = new Dictionary<string, string> { ["{{a}}"] = "pre {{b}} post", ["{{b}}"] = "SECRET-B" };
+        Assert.Equal("x pre {{b}} post y", Placeholder.Replace("x {{a}} y", map));
+        Assert.DoesNotContain("SECRET-B", Placeholder.Replace("x {{a}} y", map));
+    }
+
+    [Fact]
+    public void Replace_UnknownTokenKeptVerbatim()
+    {
+        var map = new Dictionary<string, string> { ["{{a}}"] = "X" };
+        Assert.Equal("X {{unknown}}", Placeholder.Replace("{{a}} {{unknown}}", map));
+    }
 }

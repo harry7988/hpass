@@ -22,14 +22,11 @@ public static class Hardening
 
     public static bool Unix => OperatingSystem.IsLinux() || OperatingSystem.IsMacOS();
 
-    public static bool IsRoot()
-    {
-        if (!Unix) return false;
-        if (Environment.UserName == "root") return true;
-        // 经 sudo 重拉：SUDO_USER/SUDO_UID 由 sudo 设置
-        return Environment.GetEnvironmentVariable("SUDO_USER") is not null
-            && Environment.GetEnvironmentVariable("SUDO_UID") is not null;
-    }
+    [System.Runtime.InteropServices.DllImport("libc", SetLastError = true)]
+    private static extern uint geteuid();
+
+    /// <summary>以 geteuid 判定（SUDO_USER 等环境变量可被任意进程伪造，只作展示参考）。</summary>
+    public static bool IsRoot() => Unix && geteuid() == 0;
 
     public static bool IsImmutable(string path)
     {
@@ -63,6 +60,35 @@ public static class Hardening
     }
 
     public static bool IsProtected(string path) => IsImmutable(path) || !IsUserWritable(path);
+
+    /// <summary>
+    /// 符号链接检测（防提权：root 的 chown/chmod/rename 语义对 symlink 的处理会跟随/替换链接，
+    /// 恶意进程可用 symlink 把 root 操作重定向到任意文件）。硬链接无法以路径区分，威胁模型如实声明。
+    /// </summary>
+    public static bool IsSymbolicLink(string path)
+    {
+        try
+        {
+            // 不得用 File.Exists 作前置门：它跟随链接 stat，目录链接与悬空链接都返回 false（fail-open）
+            // LinkTarget 基于不跟随的 readlink：悬空/目录链接同样能识别
+            return new FileInfo(path).LinkTarget is not null;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    /// <summary>文件属主 uid（跨平台 stat；失败返回 -1）。root 安装时校验暂存属主=调用用户，收窄跨用户伪造面。</summary>
+    public static int FileOwnerUid(string path)
+    {
+        var stat = OperatingSystem.IsMacOS() ? $"stat -f %u {Q(path)}" : $"stat -c %u {Q(path)}";
+        return int.TryParse(Sh(stat).Trim(), out var uid) ? uid : -1;
+    }
+
+    /// <summary>用户名 → uid（失败返回 -1）。</summary>
+    public static int UserIdOf(string userName) =>
+        int.TryParse(Sh($"id -u {Q(userName)}").Trim(), out var uid) ? uid : -1;
 
     /// <summary>保护等级：全部核心文件受保护 = Hardened；部分 = Interrupted（中断态，等待恢复）。</summary>
     public static Level GetLevel(string home)
@@ -113,6 +139,7 @@ public static class Hardening
     /// <summary>root 路径：核心文件 root 属主 440 + 不可变。SUDO_GROUP 不含用户时降级 444/755 保住 exec 读路径。</summary>
     public static void ApplyRootOwnership(string home)
     {
+        if (IsSymbolicLink(home)) throw new VaultException($"拒绝对符号链接执行特权操作：{home}（可能的提权攻击）");
         foreach (var f in CoreFiles)
         {
             var p = Path.Combine(home, f);
@@ -122,15 +149,19 @@ public static class Hardening
         var grp = group ?? (OperatingSystem.IsMacOS() ? "wheel" : "root");
         var dirMode = member ? "750" : "755";
         Sh($"chown root:{grp} {Q(home)} && chmod {dirMode} {Q(home)}", check: true);
+        // 操作后复核：目录/文件在窗口内被换成符号链接即中止（rename-dance 之外的最后防线）
+        if (IsSymbolicLink(home)) throw new VaultException($"特权操作后 {home} 变成了符号链接，已中止（可能的提权攻击）");
     }
 
     public static void ApplyRootFilePerms(string path)
     {
+        if (IsSymbolicLink(path)) throw new VaultException($"拒绝对符号链接执行特权操作：{path}（可能的提权攻击）");
         var (group, member) = RootGroup();
         var grp = group ?? (OperatingSystem.IsMacOS() ? "wheel" : "root");
         var mode = member ? "440" : "444";
         Sh($"chown root:{grp} {Q(path)} && chmod {mode} {Q(path)}", check: true);
         SetImmutable(path);
+        if (IsSymbolicLink(path)) throw new VaultException($"特权操作后 {path} 变成了符号链接，已中止（可能的提权攻击）");
     }
 
     private static (string? Group, bool Member) RootGroup()
@@ -138,26 +169,42 @@ public static class Hardening
         var user = Environment.GetEnvironmentVariable("SUDO_USER") ?? Environment.UserName;
         var group = Environment.GetEnvironmentVariable("SUDO_GROUP");
         var member = !string.IsNullOrEmpty(group) && Sh($"id -Gn {Q(user)} 2>/dev/null || true").Contains(group!);
+        if (!member)
+        {
+            // 回退：用调用用户的主组（id -gn），避免 444/755 把元数据与密文暴露给全机本地用户
+            var primary = Sh($"id -gn {Q(user)} 2>/dev/null || true").Trim();
+            if (primary.Length > 0 && !primary.Contains(' ') && !primary.Contains('\n'))
+                return (primary, true);
+        }
         return (group, member);
     }
 
-    /// <summary>清理中断残留的暂存文件（仅密文，可安全删除）。返回清理数量。</summary>
-    public static int CleanStaging(string home)
+    /// <summary>
+    /// 清理中断残留的暂存文件（仅密文，可安全删除）。
+    /// 跳过 minAgeSeconds 内的新鲜暂存——它们可能是并发 set 正在等待提权搬运的内容。
+    /// </summary>
+    public static int CleanStaging(string home, int minAgeSeconds = 60)
     {
         var dir = Path.Combine(home, "run", "staging");
         if (!Directory.Exists(dir)) return 0;
         var count = 0;
         foreach (var f in Directory.EnumerateFiles(dir))
         {
-            try { File.Delete(f); count++; } catch { }
+            try
+            {
+                if ((DateTime.UtcNow - File.GetLastWriteTimeUtc(f)).TotalSeconds < minAgeSeconds) continue;
+                File.Delete(f);
+                count++;
+            }
+            catch { }
         }
         return count;
     }
 
-    internal static string Q(string p) => "'" + p.Replace("'", "'\\''") + "'";
+    public static string Q(string p) => "'" + p.Replace("'", "'\\''") + "'";
 
     /// <summary>执行 shell 命令；check=true 时非零退出抛 VaultException。返回 stdout。</summary>
-    internal static string Sh(string command, bool check = false)
+    public static string Sh(string command, bool check = false)
     {
         var (code, output) = RunCapture("/bin/sh", ["-c", command]);
         if (check && code != 0)
@@ -165,16 +212,27 @@ public static class Hardening
         return output;
     }
 
-    public static (int Exit, string Output) RunCapture(string fileName, IReadOnlyList<string> args, bool showOutput = false)
+    public static (int Exit, string Output) RunCapture(string fileName, IReadOnlyList<string> args, bool showOutput = false, int timeoutMs = 10_000)
     {
         var psi = new ProcessStartInfo(fileName) { UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = showOutput ? false : true };
         foreach (var a in args) psi.ArgumentList.Add(a);
+        // 提权子进程同样不透传主口令
+        psi.Environment.Remove("HPASS_PASSPHRASE");
+        psi.Environment.Remove("HPASS_PASSPHRASE_FILE");
         try
         {
             using var p = Process.Start(psi)!;
-            var output = p.StandardOutput.ReadToEnd();
-            if (!showOutput) p.StandardError.ReadToEnd();
-            p.WaitForExit(10_000);
+            var outputTask = p.StandardOutput.ReadToEndAsync();
+            var errTask = showOutput ? null : p.StandardError.ReadToEndAsync();
+            var output = outputTask.Result;
+            if (errTask is not null) _ = errTask.Result;
+            if (!p.WaitForExit(timeoutMs))
+            {
+                // 超时必须杀掉：否则孤儿 sudo 可能稍后自行完成 root 安装，与用户重试形成竞争
+                try { p.Kill(entireProcessTree: true); } catch { }
+                p.WaitForExit(2_000);
+                return (-1, output);
+            }
             return (p.HasExited ? p.ExitCode : -1, output);
         }
         catch (Exception e)

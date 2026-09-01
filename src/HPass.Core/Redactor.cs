@@ -15,7 +15,9 @@ public sealed class StreamRedactor
 
     public StreamRedactor(IReadOnlyDictionary<string, string> secretToToken)
     {
+        // 空 secret 必须过滤：IndexOf 对空 needle 恒命中 0，会让 Process 死循环并无限写 token（OOM）
         _rules = secretToToken
+            .Where(kv => kv.Key.Length > 0)
             .Select(kv => (Encoding.UTF8.GetBytes(kv.Key), Encoding.UTF8.GetBytes(kv.Value)))
             .OrderByDescending(r => r.Item1.Length)
             .ToArray();

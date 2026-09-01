@@ -108,7 +108,9 @@ public class HardeningFlowTests
         {
             var stagingDir = Path.Combine(home, "run", "staging");
             Directory.CreateDirectory(stagingDir);
-            File.WriteAllText(Path.Combine(stagingDir, "vault.json.deadbeef"), "{\"version\":1,\"entries\":[]}");
+            var stale = Path.Combine(stagingDir, "vault.json.deadbeef");
+            File.WriteAllText(stale, "{\"version\":1,\"entries\":[]}");
+            File.SetLastWriteTimeUtc(stale, DateTime.UtcNow.AddMinutes(-5));   // doctor 会跳过 60s 内的新鲜暂存
 
             var (exit, stdout, _) = F.RunIn(home, null, "doctor");
             Assert.Equal(0, exit);

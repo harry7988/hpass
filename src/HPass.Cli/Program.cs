@@ -33,9 +33,10 @@ public static class CliRunner
             Interactive = interactive,
         };
 
-        // 全局选项 --home <dir> 可出现在任意位置
+        // 全局选项 --home <dir>：只认命令名之前的位置（第 0/1 个 token），
+        // 避免劫持子命令自己的 --home 参数（如 hpass exec -- gpg --home ~/.gnupg …）
         var rest = new List<string>(args);
-        for (var i = 0; i < rest.Count - 1; i++)
+        for (var i = 0; i < Math.Min(2, rest.Count - 1); i++)
         {
             if (rest[i] == "--home")
             {

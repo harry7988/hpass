@@ -49,8 +49,9 @@
 - **主动绕过**：Agent 构造 `hpass exec -- sh -c 'echo {{db}} | base64'` 之类变换外传 —— 输出脱敏按字节精确匹配，
   编码后即不再匹配，**不防**。这属于恶意软件范畴（Agent 若有网络权，还能直接外传数据）。定位是"防意外，不防恶意"。
 - **回显探测（字典攻击）**：Agent 换各种候选语句跑 `echo`，观察哪个被替换成占位符即可确认密码 —— 
-  即"替换位置本身是泄露面"。缓解：`exec` 拒绝"回显原语（echo/printf/Write-Output/puts…）与密文占位符同语句"的命令
-  （`--allow-echo` 显式放行供人工验证）；配合 A7 弱密码拦截，使可探测的弱答案无法录入。
+  即"替换位置本身是泄露面"。缓解：`exec` 采用**全文共现语义**——同一次调用中"回显原语（echo/printf/Write-Output/puts…）"
+  与"密文占位符"共现即拒绝（早期"同语句"规则可被 `x={{db}}; echo cand` 语序绕过）；`--allow-echo` 显式放行。
+  代价：`echo 进度 && mysql -p{{db}} …` 这类组合也会被拦，需 --allow-echo。配合 A7 弱密码拦截，使可探测的弱答案无法录入。
 - Agent 诱发提权：`_install-staged` 有路径白名单（暂存必须位于 `run/staging` 之下、最终只能是三个 vault 文件），
   不能被当作任意 root 文件搬运工；sudo 密码由用户输入，Agent 无法从 hpass 获取。
 
@@ -82,6 +83,14 @@
 | 用户级 | `harden`（macOS 普通用户） | 核心 vault 文件 uchg 不可变 | 自动：清 uchg → 覆盖 → 复加 uchg（用户态完成） |
 | 管理员级 | `sudo hpass harden` | root 属主 440（组对齐 SUDO_USER）+ schg/`chattr +i`；目录 750 | 自动：sudo（先 `-n` 免密再交互）重拉自身执行 `_install-staged`，**只搬运密文**；Windows 走 icacls 指引 |
 
+管理员级补充说明：
+- macOS 所有本地用户主组均为共享的 staff，"组对齐"等价于全机本地用户可读密文配对（可离线穷举）；
+  如需收窄请配合 FileVault/家目录权限，或等待后续 per-file ACL 支持。Linux 主组通常私有，不受影响。
+- `_install-staged` 的 root 路径：暂存目录链（home/run/staging）符号链接拒绝 + 内容结构验证（合法 JSON ≤8MB）
+  + 新内容经 O_EXCL 临时名写入后 rename 覆盖（rename 不跟随链接）+ 旧真身转移 `.hpass-orig-*` 复核、
+  仅在成功后删除。中断残留的 `.hpass-orig-*` / `.hpass-new-*` 由 doctor 报告（不自动删除——orig 是旧库唯一副本）。
+- `--env` 注入同样计入"密文引用"参与回显探测判定（第 2 轮评审堵住的绕过）。
+
 - `exec` 读路径**永不提权**（AI 调用不触发任何系统权限提示）。
 - 中断恢复：清保护与复加保护之间被打断 → 文件处于"未保护但完整"状态；`doctor` 检测（部分保护 = 中断态）并清理 `run/staging` 残留（仅密文）、补齐缺失保护。
 - 失败不产生半写状态：安装失败时最终文件不变，暂存密文保留供 `sudo _install-staged` 手动搬运。
@@ -93,7 +102,7 @@
 | 身份密钥 | RSA-3072（OAEP-SHA256 包裹 DEK）——Windows CNG 不支持 X25519，故选全平台一致的 RSA |
 | 数据密钥 DEK | 随机 AES-256，仅密文存于 vault |
 | 条目加密 | AES-256-GCM，nonce 96bit，AAD=`条目名\|字段路径`（密码路径为 `\x01password`） |
-| 口令派生 | PBKDF2-HMAC-SHA512，210,000 迭代，16B 盐（Argon2id 列为后续项，需 AOT 兼容验证） |
+| 口令派生 | PBKDF2-HMAC-SHA512，600,000 迭代（OWASP 现行推荐；旧 vault 按各自存储值解，兼容），16B 盐（Argon2id 列为后续项） |
 | 随机数 | `RandomNumberGenerator`（CSPRNG） |
 
 ## 5. 已知残余风险清单
@@ -104,7 +113,23 @@
 4. `HPASS_PASSPHRASE` 环境变量方式可被同用户进程读取（自动化便利与安全的折中；推荐 `HPASS_PASSPHRASE_FILE` 600 权限文件）。
 5. .NET 运行时内存残留（byte[] 清除已做，string 场景最小化）。
 6. cmd.exe 的引号语义特殊，路径复杂时建议 pwsh。
-7. 回显探测拦截是**启发式**（正则识别回显原语与占位符同语句）：不覆盖全部编程语言的输出原语，
+7. 回显探测拦截是**启发式**（全文共现正则）：不覆盖全部编程语言的输出原语，
    也无法阻止 Agent 通过其他方式差分输出（如把命令结果写文件再读）；弱密码字典不可能是完备的。
    两道防线叠加显著抬高门槛，但不做完备性承诺。
 8. 非回显的原样外传（如 `tee`/重定向到文件后读取）仍会把密文行替换为占位符 —— 这是预期行为（脱敏始终生效）。
+9. **env 注入与 /proc**：`--env db:MYSQL_PWD` 把密码放进子进程环境；Linux 上祖先进程（驱动 hpass 的 AI shell）
+   可经 `/proc/<pid>/environ` 读到（yama ptrace_scope=1 不拦祖先）。argv 之外唯一同时避开 argv 与 environ 的模式是
+   **脚本 stdin**——优先级应为：脚本 stdin > env 注入 > args 内联。
+10. **孤儿进程逃逸**：超时杀进程采用"独立进程组 + kill(-pgid)"与 Kill(entireProcessTree) 双保险，但 double-fork /
+    被 init 收养的后代仍可能逃逸并携带注入的环境密文继续运行。
+11. **rotate 的跨文件原子性**：vault.json 与 master.key 是两次独立安装；rotate 前自动把当前配对备份到
+    `run/rotate-backup.*`，中断导致新旧失配时可据此恢复（Unlock 失败的错误信息会提示）。
+12. **Windows ACL**：hpass 在 Windows 上不做程序化 ACL 收紧（harden 输出 icacls 指引）；--home 指向宽松 ACL
+    目录时元数据与密文可能对组/其他用户可读。
+13. root 安装路径的防御为：暂存目录链 symlink 检查 + 内容结构验证（合法 JSON）+ O_EXCL 临时名 + rename 覆盖
+    （不跟随链接）+ 操作后复核。同 UID 恶意进程仍可竞争覆写暂存（安装出"结构合法"的伪造库）——属已声明的
+    同 UID DoS/伪造面，root 属主校验仅收窄跨用户伪造。
+14. `config.json`（用户可写）中的 DefaultShell 已白名单化（仅 auto/bash/sh/pwsh/cmd/none），任意可执行路径只能经
+    用户亲自输入的 `--shell` 指定。
+15. 孙进程持有 stdout 管道时，正常退出路径最多再等 10s 后输出尾部可能被截断（数据丢失面，非泄露面）。
+16. rotate 备份 `run/rotate-backup.*`（600）保留至下次 rotate 覆盖；与当前库同口令加密，泄露面等价于密文本身。

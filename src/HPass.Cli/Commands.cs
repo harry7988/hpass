@@ -8,17 +8,26 @@ public static class Commands
     internal static string GetPassphrase(CliContext ctx, bool confirm)
     {
         var env = Environment.GetEnvironmentVariable("HPASS_PASSPHRASE");
-        if (!string.IsNullOrEmpty(env)) return env;
+        if (!string.IsNullOrEmpty(env)) return CheckLength(env);
 
         var file = Environment.GetEnvironmentVariable("HPASS_PASSPHRASE_FILE");
         if (!string.IsNullOrEmpty(file) && File.Exists(file))
-            return File.ReadAllText(file).TrimEnd('\r', '\n');
+        {
+            if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS())
+            {
+                var mode = File.GetUnixFileMode(file);
+                if (mode.HasFlag(UnixFileMode.GroupRead) || mode.HasFlag(UnixFileMode.OtherRead))
+                    ctx.ErrText.WriteLine($"hpass: 警告：口令文件 {file} 对组/其他用户可读（主口令泄露=库可离线穷举），建议 chmod 600");
+            }
+            return CheckLength(File.ReadAllText(file).TrimEnd('\r', '\n'));
+        }
 
         if (!ctx.Interactive)
             throw new VaultException("非交互环境需要解锁：请设置 HPASS_PASSPHRASE 或 HPASS_PASSPHRASE_FILE");
 
         ctx.ErrText.Write("主口令: ");
         var first = HiddenInput.ReadLineHidden(ctx.In, ctx.Interactive);
+        first = CheckLength(first);
         if (first.Length < 8) throw new VaultException("口令至少需要 8 个字符");
         if (confirm)
         {
@@ -27,6 +36,15 @@ public static class Commands
             if (first != second) throw new VaultException("两次输入不一致");
         }
         return first;
+    }
+
+    private static string CheckLength(string passphrase)
+    {
+        if (passphrase.Length > 1024)
+            throw new VaultException("口令过长（>1024 字符），拒绝使用");
+        if (passphrase.Length < 8)
+            throw new VaultException("口令至少需要 8 个字符（env/文件方式与交互输入执行同一标准）");
+        return passphrase;
     }
 
     public static int Init(CliContext ctx, string[] args)
@@ -88,6 +106,9 @@ public static class Commands
         }
         else throw new UsageException("非交互环境请使用 --password-stdin 从 stdin 提供密码（禁止命令行明文传密码）");
 
+        if (password.Length == 0)
+            throw new UsageException("密码不能为空");
+
         // 弱密文拦截：密码=常见语句时会与正常输出碰撞，且"被替换的位置"会直接暴露密码内容
         if (!forceWeak && WeakSecret.Check(password) is { } reason)
             throw new UsageException($"拒绝保存弱密码：{reason}。如确要使用请追加 --force-weak（风险自担：输出中的常见文本会被大面积误替换为占位符，并可被据此推测）");
@@ -102,6 +123,11 @@ public static class Commands
             string value = fvalue ?? (ctx.Interactive
                 ? HiddenInputWithPrompt(ctx, $"字段 {fname} 的值: ")
                 : throw new UsageException($"非交互环境请用 -f {fname}=<值> 提供字段值"));
+            if (value.Length == 0)
+                throw new UsageException($"字段 {fname} 的值不能为空");
+            // 敏感字段名经 argv 传值会进 shell history/ps：提醒改用交互隐藏输入
+            if (fvalue is not null && LooksSensitive(fname))
+                ctx.ErrText.WriteLine($"hpass: 警告：字段 {fname} 形似敏感字段，命令行传值会进入 shell history——建议改用交互隐藏输入（hpass set … -f {fname}）");
             // 字段值（如 host=127.0.0.1 这类常见值）不阻断，仅警告：与密码不同，字段常为非敏感配置
             if (WeakSecret.Check(value) is { } fieldReason)
                 ctx.ErrText.WriteLine($"hpass: 警告：字段 {fname} 的值{fieldReason}；作为密文注入时可能与正常输出碰撞，请确认");
@@ -110,6 +136,13 @@ public static class Commands
         vault.Save();
         ctx.OutText.WriteLine($"已保存条目 {name}（{vault.Data.Entries.Count} 个条目）");
         return ExitCodes.Ok;
+    }
+
+    private static bool LooksSensitive(string fieldName)
+    {
+        foreach (var marker in new[] { "key", "token", "secret", "pin", "password", "passwd", "pwd" })
+            if (fieldName.Contains(marker, StringComparison.OrdinalIgnoreCase)) return true;
+        return false;
     }
 
     private static string HiddenInputWithPrompt(CliContext ctx, string prompt)
@@ -250,7 +283,7 @@ public static class Commands
             ctx.OutText.WriteLine("将以 sudo 重新执行加固（root 属主 + chattr +i）…");
             var exe = Environment.ProcessPath
                 ?? throw new VaultException("无法定位 hpass 可执行文件");
-            var (code, _) = Hardening.RunCapture("sudo", ["--", exe, "--home", ctx.Home, "harden"], showOutput: true);
+            var (code, _) = Hardening.RunCapture("sudo", ["--", exe, "--home", ctx.Home, "harden"], showOutput: true, timeoutMs: 300_000);
             return code == 0 ? ExitCodes.Ok : ExitCodes.Vault;
         }
         ctx.OutText.WriteLine($"非交互环境（Linux 普通用户无法 chattr）：请手动运行 sudo hpass --home \"{ctx.Home}\" harden");
@@ -270,6 +303,26 @@ public static class Commands
             .Select(n => Path.GetFullPath(Path.Combine(ctx.Home, n)));
         if (!allowed.Contains(final))
             throw new UsageException("安全限制：最终路径只能是 vault.json / master.key / config.json");
+
+        // 手动恢复路径同样持锁：与并发 set 竞争同一 final 会丢更新
+        using var _lock = Vault.FileLock.Acquire(ctx.Home);
+
+        var sudoUser = Environment.GetEnvironmentVariable("SUDO_USER");
+        if (Hardening.IsRoot())
+        {
+            // root 搬运时校验暂存属主 = 调用用户（SUDO_USER），收窄跨用户伪造 staging 的面
+            if (!string.IsNullOrEmpty(sudoUser))
+            {
+                var owner = Hardening.FileOwnerUid(staging);
+                var caller = Hardening.UserIdOf(sudoUser);
+                if (owner >= 0 && caller >= 0 && owner != caller)
+                    throw new UsageException($"安全限制：暂存文件属主（uid {owner}）与调用用户（uid {caller}）不一致，拒绝安装");
+            }
+            // root 首次创建的 lock 若留在 root 名下，用户侧从此 EACCES——归还给调用用户
+            var lockPath = Path.Combine(ctx.Home, "run", "lock");
+            if (File.Exists(lockPath) && !string.IsNullOrEmpty(sudoUser))
+                _ = Hardening.Sh($"chown {Hardening.Q(sudoUser)} {Hardening.Q(lockPath)} 2>/dev/null || true");
+        }
         SecureFile.InstallStagedDirect(staging, final);
         return ExitCodes.Ok;
     }
@@ -280,13 +333,18 @@ public static class Commands
         ctx.OutText.WriteLine($"platform : {System.Runtime.InteropServices.RuntimeInformation.OSDescription} {System.Runtime.InteropServices.RuntimeInformation.OSArchitecture}");
         var ok = true;
 
-        // 中断检测与恢复（I6 / §5.1）：先清理残留暂存（仅密文，可安全删除）
-        var cleaned = Hardening.CleanStaging(ctx.Home);
-        if (cleaned > 0)
-            ctx.OutText.WriteLine($"中断残留 : 已清理 {cleaned} 个未安装的暂存文件（run/staging，仅密文）");
-
+        // 中断检测与恢复（I6 / §5.1）：清理残留暂存（仅密文，可安全删除）。
+        // 持有写锁 + 跳过 60s 内的新鲜暂存，避免误删并发 set 正在等待提权搬运的内容
         if (Vault.Exists(ctx.Home))
         {
+            using var _stagingLock = Vault.FileLock.Acquire(ctx.Home);
+            var cleaned = Hardening.CleanStaging(ctx.Home);
+            if (cleaned > 0)
+                ctx.OutText.WriteLine($"中断残留 : 已清理 {cleaned} 个未安装的暂存文件（run/staging，仅密文）");
+            // root 安装中断可能留下 *.hpass-orig-*（旧库唯一副本）/*.hpass-new-*：报告并给出恢复指引，不自动删除
+            foreach (var pattern in new[] { "*.hpass-orig-*", "*.hpass-new-*" })
+                foreach (var f in Directory.EnumerateFiles(ctx.Home, pattern))
+                    ctx.OutText.WriteLine($"安装残留 : {Path.GetFileName(f)}（特权安装被中断的产物；orig 为旧库副本，可用 sudo 手动改名恢复，详见 threat-model §3）");
             using var vault = Vault.Open(ctx.Home);
             ctx.OutText.WriteLine($"vault    : 正常（{vault.Data.Entries.Count} 个条目，元数据可查）");
             if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS())

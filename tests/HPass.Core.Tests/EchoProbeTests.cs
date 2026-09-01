@@ -14,6 +14,7 @@ public class EchoProbeTests
     [InlineData("sh -c 'echo {{db}}'")]
     [InlineData("echo {{db.host}}")]
     [InlineData("echo first; echo {{db}}")]
+    [InlineData("echo done && mysql -p{{db}} -e x")]        // 新语义：回显进度+使用密码共现也拦（--allow-echo 放行）
     [InlineData("echo x && printf {{db}}")]
     public void EchoWithSecretPlaceholder_Detected(string command)
     {
@@ -28,7 +29,6 @@ public class EchoProbeTests
     [InlineData("echo user={{db.user}}")]
     [InlineData("printf '%s' \"$HPASS_V\"")]                // 环境变量注入模式
     [InlineData("echo-backup {{db}}")]                      // echo- 开头的文件名不误伤（原语后需空白）
-    [InlineData("echo done && mysql -p{{db}} -e x")]        // echo 与占位符被 && 分隔，非同语句
     [InlineData("tar czf out.tgz {{db.host}}")]             // 字段值为密文但无回显原语
     [InlineData("echo hello world")]
     [InlineData("printenv PATH")]
@@ -38,13 +38,19 @@ public class EchoProbeTests
     }
 
     [Fact]
-    public void MultiLineScript_PerLineChecked()
+    public void MultiLineScript_CooccurrenceDetected()
     {
-        var script = "#!/bin/sh\necho start\nmysql -p{{db}} -e 'select 1'\necho done\n";
-        Assert.False(EchoProbe.IsProbe(script, out _));
+        // 全文共现语义：脚本里既有回显又有密文占位符 → 拦截（无论语序/分隔符）
+        var script = "#!/bin/sh\nmysql -p{{db}} -e 'select 1'\necho done\n";
+        Assert.True(EchoProbe.IsProbe(script, out _));
 
-        var probeScript = "#!/bin/sh\necho start\necho pw={{db}}\n";
-        Assert.True(EchoProbe.IsProbe(probeScript, out _));
+        // 只有回显、无密文占位符 → 放行
+        var clean = "#!/bin/sh\necho start\nmysql -u root -e 'select 1'\necho done\n";
+        Assert.False(EchoProbe.IsProbe(clean, out _));
+
+        // 只有占位符、无回显原语 → 放行
+        var noEcho = "#!/bin/sh\nmysql -p{{db}} -e 'select 1'\n";
+        Assert.False(EchoProbe.IsProbe(noEcho, out _));
     }
 
     [Fact]

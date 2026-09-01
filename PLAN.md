@@ -303,7 +303,7 @@ h-password/
 
 **集成测试（真实 shell，按 OS 启用）**：
 - 矩阵：macOS{bash,sh} × Linux{bash,sh,dash} × Windows{pwsh,cmd}。
-- 场景：三模式 × 各 shell；`ps` 断言（env 模式下子进程 argv/env 不可见密码——Linux/proc 与 macOS ps 检查）；超时杀进程树；退出码透传；`echo {{db}}` 类命令的输出必须已脱敏。
+- 场景：三模式 × 各 shell；argv 干净（env 模式下密码不进 argv；注意 Linux 上 /proc/<pid>/environ 对祖先进程可读，故推荐优先级为脚本 stdin > env > 内联——见 threat-model）；超时杀进程树；退出码透传；`echo {{db}}` 类命令的输出必须已脱敏。
 - 加固：用户态进程写 vault 必被拒；提权覆盖流程成功；中断后自动恢复保护；无 sudo / 不支持 `chattr` 的文件系统优雅降级。
 
 **安全回归用例（CI 必须常绿）**：未知占位符拒跑（I2）、输出脱敏（I3）、错误信息无 secret（I5）、vault 拷贝到无钥环境不可解（I4）、用户态写 vault 被拒且不产生半写状态（I6）、list/inspect 输出不含密码与字段值（I1）。

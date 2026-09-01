@@ -51,6 +51,7 @@ public sealed class Vault : IDisposable
     {
         Directory.CreateDirectory(Path.Combine(dir, "run"));
         ApplyDirectoryPermissions(dir);
+        ApplyDirectoryPermissions(Path.Combine(dir, "run"));
 
         var vault = new Vault(dir);
         var dek = Crypto.RandomBytes(Crypto.DekSize);
@@ -62,7 +63,9 @@ public sealed class Vault : IDisposable
             WrappedDek = new WrappedKey { Ct = Convert.ToBase64String(Crypto.WrapDek(rsa, dek)) },
         };
         vault._dek = dek;
-        vault._privateKey = Crypto.ImportPrivateKey(Crypto.ExportPrivateKey(rsa));
+        var pk = Crypto.ExportPrivateKey(rsa);
+        vault._privateKey = Crypto.ImportPrivateKey(pk);
+        pk.AsSpan().Clear();
         vault.SaveMasterKey(passphrase);
         vault.Save();
         vault.SaveConfig(new HPassConfig());
@@ -76,6 +79,11 @@ public sealed class Vault : IDisposable
         var vault = new Vault(dir);
         vault.Data = LoadJson<VaultFile>(vault.VaultPath) ?? throw new VaultException("vault.json 解析失败，文件可能损坏");
         vault.Config = LoadJson<HPassConfig>(vault.ConfigPath) ?? new HPassConfig();
+        vault.Config.TimeoutSeconds = Math.Clamp(vault.Config.TimeoutSeconds, 1, 86_400);
+        // config.json 用户可写：DefaultShell 必须白名单化，否则同 UID 攻击者可写入任意可执行路径，
+        // 使下一次 exec 把解密后的密码交给它。任意路径只能经用户亲自输入的 --shell 指定。
+        if (vault.Config.DefaultShell is not ("auto" or "bash" or "sh" or "pwsh" or "cmd" or "none"))
+            vault.Config.DefaultShell = "auto";
         return vault;
     }
 
@@ -84,12 +92,26 @@ public sealed class Vault : IDisposable
     {
         var master = LoadJson<MasterKeyFile>(MasterKeyPath) ?? throw new VaultException("master.key 解析失败，文件可能损坏");
         var key = Crypto.DeriveKey(passphrase, Convert.FromBase64String(master.Kdf.Salt), master.Kdf.Iterations);
-        var privBytes = Crypto.Unseal(key, new SealedBox(master.Nonce, master.Ct), Encoding.UTF8.GetBytes("hpass/master.key"));
-        _dek?.AsSpan().Clear();
-        _privateKey?.Dispose();
-        _privateKey = Crypto.ImportPrivateKey(privBytes);
-        privBytes.AsSpan().Clear();
-        _dek = Crypto.UnwrapDek(_privateKey, Convert.FromBase64String(Data.WrappedDek.Ct));
+        try
+        {
+            var privBytes = Crypto.Unseal(key, new SealedBox(master.Nonce, master.Ct), Encoding.UTF8.GetBytes("hpass/master.key"));
+            _dek?.AsSpan().Clear();
+            _privateKey?.Dispose();
+            _privateKey = Crypto.ImportPrivateKey(privBytes);
+            privBytes.AsSpan().Clear();
+        }
+        finally
+        {
+            key.AsSpan().Clear();   // 异常路径也必须清除派生密钥
+        }
+        try
+        {
+            _dek = Crypto.UnwrapDek(_privateKey, Convert.FromBase64String(Data.WrappedDek.Ct));
+        }
+        catch (VaultException e)
+        {
+            throw new VaultException(e.Message + "；若刚执行过被中断的 rotate（master.key 与 vault.json 失配），可用 run/rotate-backup.* 恢复原配对后重试");
+        }
     }
 
     public bool Unlocked => _dek is not null;
@@ -141,16 +163,30 @@ public sealed class Vault : IDisposable
         foreach (var (n, v) in fields) SetField(e, n, v);
     }
 
-    /// <summary>更换身份密钥对：重生成 RSA，同一口令重新保存私钥，只重包裹 DEK。</summary>
+    /// <summary>
+    /// 更换身份密钥对：重生成 RSA，同一口令重新保存私钥，只重包裹 DEK。
+    /// vault.json 与 master.key 是两次独立安装（跨文件无原子性）——安装前先把当前配对备份到
+    /// run/rotate-backup.*（用户可写），中断导致新旧失配时可据此恢复（doctor/Unlock 失败时会提示）。
+    /// </summary>
     public void Rotate(string passphrase)
     {
         EnsureUnlocked();
+        Directory.CreateDirectory(RunDir);
+        ApplyDirectoryPermissions(RunDir);
+        var backupVault = Path.Combine(RunDir, "rotate-backup.vault.json");
+        var backupKey = Path.Combine(RunDir, "rotate-backup.master.key");
+        File.WriteAllBytes(backupVault, File.ReadAllBytes(VaultPath));
+        File.WriteAllBytes(backupKey, File.ReadAllBytes(MasterKeyPath));
+        SecureFile.Restrict(backupVault);
+        SecureFile.Restrict(backupKey);
         var dek = _dek!;
         using var rsa = Crypto.GenerateIdentity();
         Data.Identity = new VaultIdentity { PublicKey = Convert.ToBase64String(Crypto.ExportPublicKey(rsa)) };
         Data.WrappedDek = new WrappedKey { Ct = Convert.ToBase64String(Crypto.WrapDek(rsa, dek)) };
         _privateKey?.Dispose();
-        _privateKey = Crypto.ImportPrivateKey(Crypto.ExportPrivateKey(rsa));
+        var pk = Crypto.ExportPrivateKey(rsa);
+        _privateKey = Crypto.ImportPrivateKey(pk);
+        pk.AsSpan().Clear();
         SaveMasterKey(passphrase);
         Save();
     }
@@ -158,7 +194,9 @@ public sealed class Vault : IDisposable
     public void SetPassword(VaultEntry entry, string password)
     {
         EnsureUnlocked();
-        var box = Crypto.Seal(_dek!, Encoding.UTF8.GetBytes(password), Aad(entry.Name, PasswordPath));
+        var bytes = Encoding.UTF8.GetBytes(password);
+        var box = Crypto.Seal(_dek!, bytes, Aad(entry.Name, PasswordPath));
+        bytes.AsSpan().Clear();
         entry.Nonce = box.Nonce;
         entry.Ct = box.Ct;
     }
@@ -168,7 +206,10 @@ public sealed class Vault : IDisposable
         EnsureUnlocked();
         if (entry.Nonce.Length == 0 || entry.Ct.Length == 0)
             throw new VaultException($"条目 {entry.Name} 尚未设置密码");
-        return Encoding.UTF8.GetString(Crypto.Unseal(_dek!, new SealedBox(entry.Nonce, entry.Ct), Aad(entry.Name, PasswordPath)));
+        var pt = Crypto.Unseal(_dek!, new SealedBox(entry.Nonce, entry.Ct), Aad(entry.Name, PasswordPath));
+        var result = Encoding.UTF8.GetString(pt);
+        pt.AsSpan().Clear();
+        return result;
     }
 
     public void SetField(VaultEntry entry, string fieldName, string value)
@@ -177,7 +218,9 @@ public sealed class Vault : IDisposable
         if (fieldName is "user" or "tenant")
             throw new UsageException($"字段名 {fieldName} 为保留字，不能用作自定义字段");
         EnsureUnlocked();
-        var box = Crypto.Seal(_dek!, Encoding.UTF8.GetBytes(value), Aad(entry.Name, FieldPath(fieldName)));
+        var bytes = Encoding.UTF8.GetBytes(value);
+        var box = Crypto.Seal(_dek!, bytes, Aad(entry.Name, FieldPath(fieldName)));
+        bytes.AsSpan().Clear();
         var f = entry.Fields.FirstOrDefault(x => x.Name == fieldName);
         if (f is null) { f = new EncryptedField { Name = fieldName }; entry.Fields.Add(f); }
         f.Nonce = box.Nonce;
@@ -190,7 +233,10 @@ public sealed class Vault : IDisposable
             ?? throw new PlaceholderException(Token(entry.Name, fieldName), entry.Name,
                 $"条目 {entry.Name} 不存在字段 {fieldName}");
         EnsureUnlocked();
-        return Encoding.UTF8.GetString(Crypto.Unseal(_dek!, new SealedBox(f.Nonce, f.Ct), Aad(entry.Name, FieldPath(fieldName))));
+        var pt = Crypto.Unseal(_dek!, new SealedBox(f.Nonce, f.Ct), Aad(entry.Name, FieldPath(fieldName)));
+        var result = Encoding.UTF8.GetString(pt);
+        pt.AsSpan().Clear();
+        return result;
     }
 
     public const string PasswordPath = "\x01password";
@@ -237,11 +283,12 @@ public sealed class Vault : IDisposable
     {
         if (_privateKey is null) throw new VaultException("内部错误：私钥未加载");
         var salt = Crypto.RandomBytes(Crypto.SaltSize);
-        var key = Crypto.DeriveKey(passphrase, salt, 210_000);
+        var key = Crypto.DeriveKey(passphrase, salt, Crypto.Pbkdf2Iterations);
         var priv = Crypto.ExportPrivateKey(_privateKey);
         var box = Crypto.Seal(key, priv, Encoding.UTF8.GetBytes("hpass/master.key"));
         priv.AsSpan().Clear();
-        var master = new MasterKeyFile { Nonce = box.Nonce, Ct = box.Ct, Kdf = new KdfParams { Salt = Convert.ToBase64String(salt) } };
+        key.AsSpan().Clear();
+        var master = new MasterKeyFile { Nonce = box.Nonce, Ct = box.Ct, Kdf = new KdfParams { Salt = Convert.ToBase64String(salt), Iterations = Crypto.Pbkdf2Iterations } };
         StageAndInstall("master.key", MasterKeyPath,
             JsonSerializer.SerializeToUtf8Bytes(master, HPassJsonContext.Default.MasterKeyFile));
     }
@@ -251,6 +298,7 @@ public sealed class Vault : IDisposable
         Directory.CreateDirectory(Dir);
         Directory.CreateDirectory(RunDir);
         ApplyDirectoryPermissions(Dir);
+        ApplyDirectoryPermissions(RunDir);
     }
 
     private static void ApplyDirectoryPermissions(string dir)
