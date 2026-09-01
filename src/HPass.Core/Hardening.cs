@@ -227,6 +227,38 @@ public static class Hardening
         return count;
     }
 
+    /// <summary>
+    /// sudo 前校验自身可执行路径可信：属主为当前用户或 root，且从文件到根的每一级目录
+    /// 非 group/other 可写、非符号链接。不满足则不自动提权（用户可写位置的 hpass 可能被同 UID
+    /// 替换为木马，借"hpass 例行 sudo 提示"收割密码）——打印手动指引让用户亲自看清 sudo 目标。
+    /// </summary>
+    public static bool IsTrustedBinaryPath(string path)
+    {
+        if (!Unix) return true;
+        try
+        {
+            var full = Path.GetFullPath(path);
+            var uid = geteuid();
+            var owner = FileOwnerUid(full);
+            if (owner != (int)uid && owner != 0) return false;
+            var dir = Path.GetDirectoryName(full);
+            while (!string.IsNullOrEmpty(dir))
+            {
+                if (IsSymbolicLink(dir)) return false;
+                var mode = File.GetUnixFileMode(dir);
+                if (mode.HasFlag(UnixFileMode.GroupWrite) || mode.HasFlag(UnixFileMode.OtherWrite)) return false;
+                var parent = Path.GetDirectoryName(dir);
+                if (parent is null || parent == dir) break;
+                dir = parent;
+            }
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
     public static string Q(string p) => "'" + p.Replace("'", "'\\''") + "'";
 
     /// <summary>执行 shell 命令；check=true 时非零退出抛 VaultException。返回 stdout。</summary>

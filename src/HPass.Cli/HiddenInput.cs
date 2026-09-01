@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using HPass.Core;
 
 namespace HPass.Cli;
 
@@ -17,7 +18,9 @@ public static class HiddenInput
 
     private static string ReadHiddenUnix()
     {
-        _ = RunStty("-echo");
+        if (!RunStty("-echo"))
+            // fail-closed：关闭回显失败时继续读取会把口令明文回显进终端/会话录像——宁可拒绝
+            throw new VaultException("无法关闭终端回显（/bin/stty 失败）。为防口令明文回显，拒绝在此终端读取口令：请改用 HPASS_PASSPHRASE_FILE（chmod 600）或在常规终端运行");
         try
         {
             var line = Console.ReadLine() ?? "";
@@ -30,7 +33,7 @@ public static class HiddenInput
         }
     }
 
-    private static string RunStty(string args)
+    private static bool RunStty(string args)
     {
         // 直接执行绝对路径 /bin/stty：经 sh 按 PATH 解析会被种植假 stty 收割口令；同时清洗环境
         var psi = new System.Diagnostics.ProcessStartInfo("/bin/stty", [args])
@@ -44,12 +47,12 @@ public static class HiddenInput
         try
         {
             using var p = System.Diagnostics.Process.Start(psi)!;
-            p.WaitForExit(2000);
-            return p.StandardOutput.ReadToEnd();
+            if (!p.WaitForExit(2000)) return false;
+            return p.ExitCode == 0;
         }
         catch
         {
-            return "";
+            return false;
         }
     }
 

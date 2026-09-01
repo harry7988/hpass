@@ -121,10 +121,16 @@ public static class ShellLauncher
                     // cmd 无 stdin 脚本入口，按计划拒绝，引导用户改用 pwsh
                     throw new UsageException("cmd 不支持脚本 stdin 模式，请改用 pwsh（--shell pwsh）");
                 case "pwsh" or "pwsh.exe" or "powershell" or "powershell.exe":
+                    if (OperatingSystem.IsWindows() && scriptShellName is "powershell" or "powershell.exe")
+                        // 5.1 对重定向 stdin 按 OEM 代码页解码：非 ASCII 密文被改写 → 脱敏失配（I3 绕过面）
+                        throw new UsageException("Windows PowerShell 5.1 的 stdin 按 OEM 代码页解码，会改写非 ASCII 密文导致脱敏失配——请安装 pwsh 7+（--shell pwsh）");
                     psi.FileName = shell;
                     psi.ArgumentList.Add("-NoProfile");
                     psi.ArgumentList.Add("-Command");
                     psi.ArgumentList.Add("-");
+                    // -Command - 是逐语句 REPL 语义：退出码由最后一条语句决定（外部命令非 0/1 一律折叠为 1，
+                    // 失败后跟一条成功语句则变 0）。合成 exit $LASTEXITCODE 保退出码透传（用户显式 exit 会提前返回，无害）
+                    script += "\nexit $LASTEXITCODE\n";
                     break;
                 default: // bash / sh / zsh / dash …
                     psi.FileName = shell;

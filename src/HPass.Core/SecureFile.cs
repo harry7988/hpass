@@ -231,7 +231,7 @@ public static class SecureFile
 
     private static void TryElevatedInstall(string stagingPath, string finalPath, string? homeDir)
     {
-        var hint = $"vault 处于管理员写保护。请手动执行：sudo hpass --home \"{homeDir}\" _install-staged \"{stagingPath}\" \"{finalPath}\"";
+        var hint = $"vault 处于管理员写保护。请手动执行：sudo hpass --home {Hardening.Q(homeDir ?? "")} _install-staged {Hardening.Q(stagingPath)} {Hardening.Q(finalPath)}";
         if (!Hardening.Unix)
             throw new NeedsElevationException(stagingPath, finalPath, "Windows：文件 ACL 拒写，请以管理员重新运行本命令（hpass harden 输出含 icacls 指引）");
         if (Environment.GetEnvironmentVariable("HPASS_NO_SUDO") == "1")
@@ -243,13 +243,20 @@ public static class SecureFile
         var home = homeDir ?? Vault.DefaultHome();
         // 1) 免密 sudo（CI / 自动化），只搬运密文。子进程带 HPASS_CHILD_INSTALL 标记：
         //    写锁由父进程持有（临界区保护不变），子进程跳过重复获取以免自锁
+        // 可信性校验：hpass 自身位于用户可写路径（如 ~/.local/bin）时不自动提权——
+        // 同 UID 替换木马可借"hpass 例行 sudo 提示"收割密码；改打手动指引让用户看清 sudo 目标
+        if (!Hardening.IsTrustedBinaryPath(exe))
+            throw new NeedsElevationException(stagingPath, finalPath,
+                $"hpass 位于不受信任的路径（{exe}，用户可写位置），已禁用自动 sudo。请先校验该二进制或安装到 /usr/local/bin 后重试；" + hint);
+
         // 子进程标志经 argv 传递（--child-install）：sudo 的 env_reset 会剥离环境变量，argv 不会被改动
         var args = new List<string> { "--home", home, "_install-staged", "--child-install", stagingPath, finalPath };
         var (code, _, err1) = Hardening.RunCaptureEx("sudo", ["-n", "--", exe, .. args]);
         if (code == 0) return;
-        // 2) 交互终端：sudo 自行提示密码（写入 /dev/tty，不经 argv）；用户输密码可能远超 10s，放宽超时
+        // 2) 交互终端：先给一行可识别的先行信号（防钓鱼条件反射），再由 sudo 自行提示密码（/dev/tty，不经 argv）
         if (!Console.IsInputRedirected)
         {
+            Console.Error.WriteLine("hpass: 即将请求 sudo 密码以安装 vault 变更（仅搬运密文，目标为上述 vault 文件）");
             var (code2, _, _) = Hardening.RunCaptureEx("sudo", ["--", exe, .. args], timeoutMs: 300_000);
             if (code2 == 0) return;
         }

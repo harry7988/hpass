@@ -50,6 +50,8 @@ public static class Commands
     public static int Init(CliContext ctx, string[] args)
     {
         var noHarden = args.Contains("--no-harden");
+        // 持锁创建 + 二次确认：两个并发 init 都过 Exists 检查会交错写出失配的 master.key/vault.json（不可恢复）
+        using var _initLock = Vault.FileLock.Acquire(ctx.Home);
         if (Vault.Exists(ctx.Home))
             throw new VaultException($"vault 已存在（{ctx.Home}）。如需重置请先手动删除该目录");
 
@@ -264,7 +266,7 @@ public static class Commands
         {
             Hardening.ApplyRootOwnership(ctx.Home);
             ctx.OutText.WriteLine("已加固（管理员级）：root 属主 + 不可变标志（schg / chattr +i），密码文件只可整体覆盖。");
-            ctx.OutText.WriteLine($"exec 读路径无需提权；后续 set/delete/rename/rotate 会自动经 sudo 搬运安装（也可手动：sudo hpass --home \"{ctx.Home}\" …）");
+            ctx.OutText.WriteLine($"exec 读路径无需提权；后续 set/delete/rename/rotate 会自动经 sudo 搬运安装（也可手动：sudo hpass --home {Hardening.Q(ctx.Home)} …）");
             return ExitCodes.Ok;
         }
 
@@ -273,7 +275,7 @@ public static class Commands
             foreach (var f in Hardening.CoreFiles)
                 Hardening.SetImmutable(Path.Combine(ctx.Home, f));
             ctx.OutText.WriteLine("已加固（用户级 uchg 不可变）：文件只能整体覆盖（hpass 内部自动清/复加）。");
-            ctx.OutText.WriteLine($"升级为管理员级（root 属主 + schg）：sudo hpass --home \"{ctx.Home}\" harden");
+            ctx.OutText.WriteLine($"升级为管理员级（root 属主 + schg）：sudo hpass --home {Hardening.Q(ctx.Home)} harden");
             return ExitCodes.Ok;
         }
 
@@ -283,10 +285,15 @@ public static class Commands
             ctx.OutText.WriteLine("将以 sudo 重新执行加固（root 属主 + chattr +i）…");
             var exe = Environment.ProcessPath
                 ?? throw new VaultException("无法定位 hpass 可执行文件");
+            if (!Hardening.IsTrustedBinaryPath(exe))
+            {
+                ctx.ErrText.WriteLine($"hpass: 二进制位于不受信任路径（{exe}），不自动提权。请手动执行：sudo hpass --home {Hardening.Q(ctx.Home)} harden");
+                return ExitCodes.Vault;
+            }
             var (code, _) = Hardening.RunCapture("sudo", ["--", exe, "--home", ctx.Home, "harden"], showOutput: true, timeoutMs: 300_000);
             return code == 0 ? ExitCodes.Ok : ExitCodes.Vault;
         }
-        ctx.OutText.WriteLine($"非交互环境（Linux 普通用户无法 chattr）：请手动运行 sudo hpass --home \"{ctx.Home}\" harden");
+        ctx.OutText.WriteLine($"非交互环境（Linux 普通用户无法 chattr）：请手动运行 sudo hpass --home {Hardening.Q(ctx.Home)} harden");
         return ExitCodes.Ok;
     }
 
@@ -314,6 +321,25 @@ public static class Commands
         var sudoUser = Environment.GetEnvironmentVariable("SUDO_USER");
         if (Hardening.IsRoot())
         {
+            // root 侧不信任 argv 的 --home：必须已是真实 hpass 库（两文件俱在）、
+            // 属主==调用用户、非符号链接、目录非 group/other 可写（挡住 /tmp 等粘滞目录伪造）
+            if (!Vault.Exists(ctx.Home))
+                throw new UsageException($"安全限制：{ctx.Home} 不是已初始化的 hpass 库，拒绝在此执行特权安装");
+            if (!string.IsNullOrEmpty(sudoUser))
+            {
+                var homeOwner = Hardening.FileOwnerUid(ctx.Home);
+                var callerUid = Hardening.UserIdOf(sudoUser);
+                if (homeOwner >= 0 && callerUid >= 0 && homeOwner != callerUid)
+                    throw new UsageException($"安全限制：home 属主（uid {homeOwner}）与调用用户（uid {callerUid}）不一致，拒绝特权安装");
+            }
+            if (Hardening.IsSymbolicLink(ctx.Home))
+                throw new UsageException($"安全限制：home 是符号链接，拒绝特权安装：{ctx.Home}");
+            if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS())
+            {
+                var homeMode = File.GetUnixFileMode(ctx.Home);
+                if (homeMode.HasFlag(UnixFileMode.GroupWrite) || homeMode.HasFlag(UnixFileMode.OtherWrite))
+                    throw new UsageException($"安全限制：home 目录对组/其他用户可写（{ctx.Home}），拒绝特权安装");
+            }
             // root 搬运时校验暂存属主 = 调用用户（SUDO_USER），收窄跨用户伪造 staging 的面
             if (!string.IsNullOrEmpty(sudoUser))
             {

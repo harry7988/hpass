@@ -34,7 +34,7 @@ public static partial class EchoProbe
     public static bool IsProbe(string text, out string token)
     {
         token = "";
-        if (!EchoRegex().IsMatch(text)) return false;
+        if (!HasEchoPrimitive(text)) return false;   // 与生产门同源（含 cmd echo./echo: 变体），消除语义分叉
         foreach (Match m in SecretTokenRegex().Matches(text))
         {
             var body = m.Groups[1].Value;

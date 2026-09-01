@@ -51,10 +51,12 @@ public static partial class ExecCommand
                     if (!EnvVarNameRegex().IsMatch(envVar))
                         throw new UsageException($"--env 环境变量名非法：{envVar}");
                     // 保留变量：注入的值随后会被环境清洗移除，静默违背用户意图
-                    if (envVar is "HPASS_PASSPHRASE" or "HPASS_PASSPHRASE_FILE")
+                    if (envVar.Equals("HPASS_PASSPHRASE", StringComparison.OrdinalIgnoreCase)
+                        || envVar.Equals("HPASS_PASSPHRASE_FILE", StringComparison.OrdinalIgnoreCase))
                         throw new UsageException($"--env 不能注入保留变量：{envVar}");
-                    if (envSpecs.Any(e => e.Var == envVar))
-                        throw new UsageException($"--env 重复的环境变量：{envVar}");
+                    // Windows 子进程环境不区分大小写（OrdinalIgnoreCase 字典），仅大小写不同的重复会静默串密——统一拒绝
+                    if (envSpecs.Any(e => e.Var.Equals(envVar, StringComparison.OrdinalIgnoreCase)))
+                        throw new UsageException($"--env 重复的环境变量（不区分大小写）：{envVar}");
                     envSpecs.Add((spec[..colon], envVar));
                     break;
                 case "-f" or "--file":

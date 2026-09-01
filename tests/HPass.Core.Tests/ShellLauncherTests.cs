@@ -131,6 +131,21 @@ public class ShellLauncherTests : IDisposable
     }
 
     [Fact]
+    public void ScriptMode_Pwsh_ExitCodePassthrough()
+    {
+        if (!Unix) return;
+        try { ShellLauncher.ResolveShell("pwsh"); }
+        catch (UsageException) { return; }
+        // -Command - 的 REPL 语义会把外部命令非 0/1 退出码折叠为 1、失败后跟成功语句则变 0——
+        // 合成 exit $LASTEXITCODE 后必须如实透传
+        var script = Path.Combine(_tmp, "exit7.ps1");
+        File.WriteAllText(script, "sh -c \"exit 7\"\nWrite-Output done\n");
+        var (exit, output) = Run(Script(script, "pwsh"));
+        Assert.Equal(7, exit);
+        Assert.Contains("done", output);
+    }
+
+    [Fact]
     public void ScriptMode_Pwsh_Supported()
     {
         if (!Unix) return;
