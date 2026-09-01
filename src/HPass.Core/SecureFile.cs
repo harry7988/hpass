@@ -85,11 +85,14 @@ public static class SecureFile
         var orig = finalPath + ".hpass-orig-" + Guid.NewGuid().ToString("N");
         var fresh = finalPath + ".hpass-new-" + Guid.NewGuid().ToString("N");
         var hadFinal = File.Exists(finalPath) || Hardening.IsSymbolicLink(finalPath);
+        // home inode 快照：读取暂存后 home 仍可能被整体换成指向他用户 vault 的链接（跨用户破坏），关键操作前复核
+        var homeSnap = Hardening.PathSnapshot(dir);
 
         // 1) 真身转移到 orig：rename(2) 不跟随符号链接；转移后复核（悬空/目录链接已被入口拒绝，
         //    此处捕获的是竞态偷换），失败即恢复并中止
         if (hadFinal)
         {
+            Hardening.AssertUnchanged(dir, homeSnap, "home 目录");
             Hardening.ClearImmutable(finalPath);
             File.Move(finalPath, orig);
             if (Hardening.IsSymbolicLink(orig))
@@ -130,7 +133,8 @@ public static class SecureFile
             }
             throw;
         }
-        // 4) 仅在成功后删除旧真身（finally 无条件删除会在回滚失败时销毁唯一副本）
+        // 4) 仅在成功后删除旧真身（finally 无条件删除会在回滚失败时销毁唯一副本）；删除前复核 home 未被偷换
+        Hardening.AssertUnchanged(dir, homeSnap, "home 目录");
         try { if (File.Exists(orig)) File.Delete(orig); } catch { }
     }
 

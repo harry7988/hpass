@@ -44,6 +44,18 @@ public static class Hardening
     [System.Runtime.InteropServices.DllImport("libc", SetLastError = true)]
     private static extern int lstat(string path, byte[] buf);
 
+    /// <summary>路径的 lstat 快照 (st_dev, st_ino)，用于跨操作复核路径未被偷换。</summary>
+    public static (long Dev, long Ino) PathSnapshot(string path) => LStatPath(path);
+
+    /// <summary>复核路径仍指向快照时的 inode（防"入口一次检查、后续按路径重解析"的偷换窗口）。</summary>
+    public static void AssertUnchanged(string path, (long Dev, long Ino) snapshot, string what)
+    {
+        if (!OperatingSystem.IsLinux()) return;   // macOS 无 inode 复核（布局不同），依赖 O_NOFOLLOW
+        var now = LStatPath(path);
+        if (now.Dev < 0 || now != snapshot)
+            throw new VaultException($"安全限制：{what} 在操作期间被替换（inode 不一致），已中止：{path}");
+    }
+
     /// <summary>fd 的 (st_dev, st_ino)。缓冲必须 ≥ sizeof(struct stat)（Linux x64=144/arm64=128，macOS=144）——
     /// 只读前 16 字节但内核会写满整个结构体，16 字节缓冲会造成 root 进程堆越界写（实测复现）。</summary>
     private static (long Dev, long Ino) StatFd(int fd)
@@ -386,6 +398,18 @@ public static class Hardening
     public static void ApplyRootOwnership(string home)
     {
         if (IsSymbolicLink(home)) throw new VaultException($"拒绝对符号链接执行特权操作：{home}（可能的提权攻击）");
+        // 目录先打开并校验：入口检查到文件施权之间隔着多次 shell 派生（毫秒级窗口），先钉住 inode 再动文件
+        var earlyNoFollow = OperatingSystem.IsMacOS() ? 0x0100 : 0x20000;
+        var earlyFd = open(home, 0 | earlyNoFollow);
+        if (earlyFd >= 0)
+        {
+            try
+            {
+                if (!FdMatchesPathByInode(earlyFd, home))
+                    throw new VaultException($"安全限制：home 目录在施权前校验失败（可能被替换）：{home}");
+            }
+            finally { close(earlyFd); }
+        }
         foreach (var f in CoreFiles)
         {
             var p = Path.Combine(home, f);

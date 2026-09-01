@@ -175,6 +175,23 @@ public static partial class ExecCommand
             RedactionRules = redaction,
         };
 
+        // shell 元字符警告（非阻断）：密文含引号/美元/反引号/反斜杠时，经嵌套 shell 或脚本模式会被
+        // 二级解析成变体/碎片，字节精确脱敏对变体失配 → 建议改用 --env 注入（值不经 shell 解析，免疫）
+        var viaShell = shell is not "none" || scriptPath is not null;
+        if (viaShell && !envSpecs.Select(e => e.Entry).SequenceEqual(refs.Where(r => r.Field is null).Select(r => r.Entry)))
+        {
+            foreach (var (token, value) in tokenValues)
+            {
+                if (!NeedsSecret(new PlaceholderRef(token.Trim('{', '}').Split('.')[0],
+                        token.Contains('.') ? token.Split('.')[1].Trim('}', '{') : null))) continue;
+                if (value.IndexOfAny(['"', '\'', '$', '`', '\\']) >= 0)
+                {
+                    ctx.ErrText.WriteLine($"hpass: 警告：{token} 的值包含 shell 元字符（引号/美元/反引号/反斜杠），经 shell 解析可能产生变体绕过输出脱敏——建议改用 --env 注入（值不经 shell 解析）");
+                    break;
+                }
+            }
+        }
+
         var result = ShellLauncher.Run(request, ctx.Out, ctx.Err);
         if (result.TimedOut)
             ctx.ErrText.WriteLine($"hpass: 执行超时（{request.TimeoutSeconds}s），已终止进程树");
