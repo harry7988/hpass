@@ -107,9 +107,12 @@ public static class SecureFile
                 fs.Write(content);
                 fs.Flush(flushToDisk: true);
             }
-            Hardening.ApplyRootFilePerms(fresh);
-            // 3) rename 覆盖 final：同样不跟随链接
+            // 3) chown/chmod 可先做；**不可变标志必须在 rename 之后**——rename(2) 对不可变文件
+            //    无条件 EPERM（root 也不例外），先加标志会让整条安装路径确定性失败
+            Hardening.ApplyRootOwnershipOnly(fresh);
+            // 4) rename 覆盖 final：同样不跟随链接
             File.Move(fresh, finalPath, overwrite: true);
+            Hardening.SetImmutable(finalPath);
             if (Hardening.IsSymbolicLink(finalPath))
                 throw new VaultException($"安装后目标变成符号链接，已中止：{finalPath}（可能的攻击）");
         }
@@ -134,6 +137,9 @@ public static class SecureFile
     /// <summary>读入暂存内容并验证结构合法（按最终文件名选类型），root 只安装"结构合法的密文"。</summary>
     private static byte[] ReadAndValidateStaged(string stagingPath, string finalPath)
     {
+        var pre = new FileInfo(stagingPath).Length;     // 读前预检：防超大文件先全量载入 root 内存
+        if (pre > MaxStagedBytes)
+            throw new VaultException($"暂存文件过大（{pre} > {MaxStagedBytes} 字节），拒绝安装");
         var content = File.ReadAllBytes(stagingPath);   // 单次打开读取，长度以读到的为准（缩小 check-use 窗口）
         if (content.Length > MaxStagedBytes)
             throw new VaultException($"暂存文件过大（{content.Length} > {MaxStagedBytes} 字节），拒绝安装");
@@ -235,14 +241,17 @@ public static class SecureFile
             throw new NeedsElevationException(stagingPath, finalPath, hint + "（无法定位 hpass 可执行文件）");
 
         var home = homeDir ?? Vault.DefaultHome();
-        // 1) 免密 sudo（CI / 自动化），只搬运密文
+        // 1) 免密 sudo（CI / 自动化），只搬运密文。子进程带 HPASS_CHILD_INSTALL 标记：
+        //    写锁由父进程持有（临界区保护不变），子进程跳过重复获取以免自锁
         var args = new List<string> { "--home", home, "_install-staged", stagingPath, finalPath };
-        var (code, _) = Hardening.RunCapture("sudo", ["-n", "--", exe, .. args]);
+        var (code, _) = Hardening.RunCapture("sudo", ["-n", "--", exe, .. args],
+            configure: psi => psi.Environment["HPASS_CHILD_INSTALL"] = "1");
         if (code == 0) return;
         // 2) 交互终端：sudo 自行提示密码（写入 /dev/tty，不经 argv）；用户输密码可能远超 10s，放宽超时
         if (!Console.IsInputRedirected)
         {
-            var (code2, _) = Hardening.RunCapture("sudo", ["--", exe, .. args], showOutput: true, timeoutMs: 300_000);
+            var (code2, _) = Hardening.RunCapture("sudo", ["--", exe, .. args], showOutput: true, timeoutMs: 300_000,
+                configure: psi => psi.Environment["HPASS_CHILD_INSTALL"] = "1");
             if (code2 == 0) return;
         }
         throw new NeedsElevationException(stagingPath, finalPath, hint);

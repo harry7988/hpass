@@ -111,7 +111,7 @@ public static class CliRunner
             hpass harden / doctor / version
 
             exec 选项：--shell auto|bash|sh|pwsh|cmd|none  --env 条目:环境变量(可重复)
-                       --timeout 秒(默认120)  --home <目录>
+                       --timeout 秒(默认120)  --allow-echo(放行回显探测拦截)  --home <目录>
             环境变量：HPASS_HOME / HPASS_PASSPHRASE / HPASS_PASSPHRASE_FILE
             """);
         return ExitCodes.Usage;

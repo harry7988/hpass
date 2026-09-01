@@ -49,14 +49,18 @@ public class ShellLauncherTests : IDisposable
         return rules is null ? req : req with { RedactionRules = rules };
     }
 
-    private static ExecRequest Script(string path, string shell = "bash", int timeout = 30) =>
-        FromValues(BuildValues(File.ReadAllText(path))) with
+    private static ExecRequest Script(string path, string shell = "bash", int timeout = 30)
+    {
+        var text = File.ReadAllText(path);   // 调用方一次读入（与 CLI 相同的 ScriptText 契约）
+        return FromValues(BuildValues(text)) with
         {
             Args = [],
             ScriptPath = path,
+            ScriptText = text,
             Shell = shell,
             TimeoutSeconds = timeout,
         };
+    }
 
     [Fact]
     public void NoneMode_DirectExec_ExitCodePassthrough()

@@ -5,7 +5,7 @@ namespace HPass.Core;
 public sealed class KdfParams
 {
     public string Algo { get; set; } = "PBKDF2-SHA512";
-    public int Iterations { get; set; } = 210_000;
+    public int Iterations { get; set; } = 600_000;
     public string Salt { get; set; } = "";
 }
 

@@ -20,11 +20,15 @@ public static partial class EchoProbe
     [GeneratedRegex(@"\b(echo|printf|puts|print|write-output|write-host|console\.log)\b(\s|\(|$)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex EchoRegex();
 
+    // cmd.exe 词法变体：echo.candidate / echo:candidate 同样打印 candidate（'-' 不在集合，不误伤 echo-backup）
+    [GeneratedRegex(@"\becho\b[.:=]", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    private static partial Regex EchoCmdVariantRegex();
+
     [GeneratedRegex(@"\{\{([A-Za-z0-9_.\-]+)\}\}")]
     private static partial Regex SecretTokenRegex();
 
     /// <summary>文本中是否存在回显原语（与密文引用无关的独立判定，供 --env 场景组合使用）。</summary>
-    public static bool HasEchoPrimitive(string text) => EchoRegex().IsMatch(text);
+    public static bool HasEchoPrimitive(string text) => EchoRegex().IsMatch(text) || EchoCmdVariantRegex().IsMatch(text);
 
     /// <summary>同一文本中"回显原语"与"密文占位符"共现即判定为探测。命中返回 true，out 参数为首个密文占位符。</summary>
     public static bool IsProbe(string text, out string token)

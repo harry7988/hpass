@@ -17,7 +17,7 @@ public static class HiddenInput
 
     private static string ReadHiddenUnix()
     {
-        _ = RunSh("stty -echo");
+        _ = RunStty("-echo");
         try
         {
             var line = Console.ReadLine() ?? "";
@@ -26,21 +26,31 @@ public static class HiddenInput
         }
         finally
         {
-            _ = RunSh("stty echo");
+            _ = RunStty("echo");
         }
     }
 
-    private static string RunSh(string args)
+    private static string RunStty(string args)
     {
-        var psi = new System.Diagnostics.ProcessStartInfo("/bin/sh", ["-c", args])
+        // 直接执行绝对路径 /bin/stty：经 sh 按 PATH 解析会被种植假 stty 收割口令；同时清洗环境
+        var psi = new System.Diagnostics.ProcessStartInfo("/bin/stty", [args])
         {
             UseShellExecute = false,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
         };
-        using var p = System.Diagnostics.Process.Start(psi)!;
-        p.WaitForExit(2000);
-        return p.StandardOutput.ReadToEnd();
+        psi.Environment.Remove("HPASS_PASSPHRASE");
+        psi.Environment.Remove("HPASS_PASSPHRASE_FILE");
+        try
+        {
+            using var p = System.Diagnostics.Process.Start(psi)!;
+            p.WaitForExit(2000);
+            return p.StandardOutput.ReadToEnd();
+        }
+        catch
+        {
+            return "";
+        }
     }
 
     private const int StdInputHandle = -10;

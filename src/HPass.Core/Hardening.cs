@@ -25,6 +25,21 @@ public static class Hardening
     [System.Runtime.InteropServices.DllImport("libc", SetLastError = true)]
     private static extern uint geteuid();
 
+    [System.Runtime.InteropServices.DllImport("libc", SetLastError = true)]
+    private static extern int flock(int fd, int operation);
+
+    private const int LockEx = 2;      // LOCK_EX
+    private const int LockNb = 4;      // LOCK_NB
+
+    /// <summary>跨进程互斥锁：.NET 的 FileShare 在 Unix 上无强制力（dotnet/runtime#59995），必须 flock。</summary>
+    public static void FlockExclusive(Microsoft.Win32.SafeHandles.SafeFileHandle handle)
+    {
+        if (!Unix) return;
+        var fd = handle.DangerousGetHandle().ToInt32();
+        if (flock(fd, LockEx | LockNb) != 0)
+            throw new IOException($"flock 失败（errno {System.Runtime.InteropServices.Marshal.GetLastWin32Error()}）");
+    }
+
     /// <summary>以 geteuid 判定（SUDO_USER 等环境变量可被任意进程伪造，只作展示参考）。</summary>
     public static bool IsRoot() => Unix && geteuid() == 0;
 
@@ -125,6 +140,7 @@ public static class Hardening
     public static void ClearImmutable(string path)
     {
         if (!Unix || !File.Exists(path)) return;
+        if (IsSymbolicLink(path)) return;   // Linux chattr 经 open 跟随链接可清任意文件标志；链接交给上游拒绝
         if (OperatingSystem.IsMacOS())
         {
             Sh($"chflags nouchg {Q(path)}");
@@ -151,6 +167,16 @@ public static class Hardening
         Sh($"chown root:{grp} {Q(home)} && chmod {dirMode} {Q(home)}", check: true);
         // 操作后复核：目录/文件在窗口内被换成符号链接即中止（rename-dance 之外的最后防线）
         if (IsSymbolicLink(home)) throw new VaultException($"特权操作后 {home} 变成了符号链接，已中止（可能的提权攻击）");
+    }
+
+    /// <summary>仅 chown/chmod（不设不可变）——供"rename 前对新文件先行确权"使用；不可变必须在 rename 之后。</summary>
+    public static void ApplyRootOwnershipOnly(string path)
+    {
+        if (IsSymbolicLink(path)) throw new VaultException($"拒绝对符号链接执行特权操作：{path}（可能的提权攻击）");
+        var (group, member) = RootGroup();
+        var grp = group ?? (OperatingSystem.IsMacOS() ? "wheel" : "root");
+        var mode = member ? "440" : "444";
+        Sh($"chown root:{grp} {Q(path)} && chmod {mode} {Q(path)}", check: true);
     }
 
     public static void ApplyRootFilePerms(string path)
@@ -212,28 +238,31 @@ public static class Hardening
         return output;
     }
 
-    public static (int Exit, string Output) RunCapture(string fileName, IReadOnlyList<string> args, bool showOutput = false, int timeoutMs = 10_000)
+    public static (int Exit, string Output) RunCapture(string fileName, IReadOnlyList<string> args, bool showOutput = false, int timeoutMs = 10_000, Action<ProcessStartInfo>? configure = null)
     {
         var psi = new ProcessStartInfo(fileName) { UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = showOutput ? false : true };
         foreach (var a in args) psi.ArgumentList.Add(a);
         // 提权子进程同样不透传主口令
         psi.Environment.Remove("HPASS_PASSPHRASE");
         psi.Environment.Remove("HPASS_PASSPHRASE_FILE");
+        configure?.Invoke(psi);
         try
         {
             using var p = Process.Start(psi)!;
             var outputTask = p.StandardOutput.ReadToEndAsync();
             var errTask = showOutput ? null : p.StandardError.ReadToEndAsync();
-            var output = outputTask.Result;
-            if (errTask is not null) _ = errTask.Result;
+            // 先等退出再收流：孤儿子孙持有管道不关时，先收流会永久阻塞、超时杀永远到不了
             if (!p.WaitForExit(timeoutMs))
             {
                 // 超时必须杀掉：否则孤儿 sudo 可能稍后自行完成 root 安装，与用户重试形成竞争
                 try { p.Kill(entireProcessTree: true); } catch { }
                 p.WaitForExit(2_000);
-                return (-1, output);
+                outputTask.Wait(2_000);
+                return (-1, outputTask.IsCompleted ? outputTask.Result : "");
             }
-            return (p.HasExited ? p.ExitCode : -1, output);
+            outputTask.Wait(5_000);
+            if (errTask is not null) errTask.Wait(5_000);
+            return (p.HasExited ? p.ExitCode : -1, outputTask.IsCompleted ? outputTask.Result : "");
         }
         catch (Exception e)
         {

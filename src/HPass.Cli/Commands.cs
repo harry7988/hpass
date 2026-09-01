@@ -304,8 +304,11 @@ public static class Commands
         if (!allowed.Contains(final))
             throw new UsageException("安全限制：最终路径只能是 vault.json / master.key / config.json");
 
-        // 手动恢复路径同样持锁：与并发 set 竞争同一 final 会丢更新
-        using var _lock = Vault.FileLock.Acquire(ctx.Home);
+        // 手动恢复路径持锁（与并发 set 竞争同一 final 会丢更新）；
+        // 自动提权子进程（HPASS_CHILD_INSTALL=1）跳过——锁由发起安装的父进程持有，flock 下重取会自锁
+        using var _lock = Environment.GetEnvironmentVariable("HPASS_CHILD_INSTALL") != "1"
+            ? Vault.FileLock.Acquire(ctx.Home)
+            : null;
 
         var sudoUser = Environment.GetEnvironmentVariable("SUDO_USER");
         if (Hardening.IsRoot())
@@ -333,6 +336,11 @@ public static class Commands
         ctx.OutText.WriteLine($"platform : {System.Runtime.InteropServices.RuntimeInformation.OSDescription} {System.Runtime.InteropServices.RuntimeInformation.OSArchitecture}");
         var ok = true;
 
+        // 安装残留报告：必须在 Vault.Exists 判断之外——"final 缺失、orig 是旧库唯一副本"的恢复场景恰在此
+        foreach (var pattern in new[] { "*.hpass-orig-*", "*.hpass-new-*" })
+            foreach (var f in Directory.EnumerateFiles(ctx.Home, pattern))
+                ctx.OutText.WriteLine($"安装残留 : {Path.GetFileName(f)}（特权安装被中断的产物；orig 为旧库唯一副本，可用 sudo 手动改名恢复，切勿先 init 覆盖）");
+
         // 中断检测与恢复（I6 / §5.1）：清理残留暂存（仅密文，可安全删除）。
         // 持有写锁 + 跳过 60s 内的新鲜暂存，避免误删并发 set 正在等待提权搬运的内容
         if (Vault.Exists(ctx.Home))
@@ -341,10 +349,6 @@ public static class Commands
             var cleaned = Hardening.CleanStaging(ctx.Home);
             if (cleaned > 0)
                 ctx.OutText.WriteLine($"中断残留 : 已清理 {cleaned} 个未安装的暂存文件（run/staging，仅密文）");
-            // root 安装中断可能留下 *.hpass-orig-*（旧库唯一副本）/*.hpass-new-*：报告并给出恢复指引，不自动删除
-            foreach (var pattern in new[] { "*.hpass-orig-*", "*.hpass-new-*" })
-                foreach (var f in Directory.EnumerateFiles(ctx.Home, pattern))
-                    ctx.OutText.WriteLine($"安装残留 : {Path.GetFileName(f)}（特权安装被中断的产物；orig 为旧库副本，可用 sudo 手动改名恢复，详见 threat-model §3）");
             using var vault = Vault.Open(ctx.Home);
             ctx.OutText.WriteLine($"vault    : 正常（{vault.Data.Entries.Count} 个条目，元数据可查）");
             if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS())
@@ -365,7 +369,9 @@ public static class Commands
         else
         {
             ok = false;
-            ctx.OutText.WriteLine("vault    : 未初始化（hpass init）");
+            ctx.OutText.WriteLine(Directory.Exists(ctx.Home) && Directory.EnumerateFiles(ctx.Home, "*.hpass-orig-*").Any()
+                ? "vault    : 文件缺失，但存在 *.hpass-orig-* 残留（旧库唯一副本）——请先恢复再考虑 init"
+                : "vault    : 未初始化（hpass init）");
         }
         return ok ? ExitCodes.Ok : ExitCodes.Vault;
     }

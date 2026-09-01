@@ -82,10 +82,12 @@ public static class ShellLauncher
         var sep = OperatingSystem.IsWindows() ? ';' : ':';
         foreach (var dir in pathVar.Split(sep, StringSplitOptions.RemoveEmptyEntries))
         {
+            // 相对条目（"."、"./bin" 等）会随 CWD 解析——拒绝，防共享目录种植假 shell
+            if (!Path.IsPathRooted(dir)) continue;
             try
             {
                 var candidate = Path.Combine(dir.Trim(), exe);
-                if (File.Exists(candidate)) return candidate;
+                if (File.Exists(candidate) && Path.IsPathRooted(Path.GetFullPath(candidate))) return candidate;
             }
             catch { }
         }
@@ -102,9 +104,11 @@ public static class ShellLauncher
 
         if (scriptMode)
         {
+            if (req.ScriptText is null)
+                throw new UsageException("脚本模式必须由调用方一次读入内容（ScriptText）；按路径二次读取会重新引入 TOCTOU");
             // 先归一 CRLF（必须在占位符替换之前：注入的密文值本身可能含 \r\n，替换后归一会改写值导致脱敏失配）
-            var script = req.ScriptText ?? File.ReadAllText(req.ScriptPath!);
-            var scriptShellName = Path.GetFileName(shell);
+            var script = req.ScriptText;
+            var scriptShellName = ShellNameOf(shell);
             var isPwshScript = scriptShellName is "pwsh" or "pwsh.exe" or "powershell" or "powershell.exe";
             if (shell != "none" && !isPwshScript && scriptShellName is not "cmd" and not "cmd.exe")
                 script = script.Replace("\r\n", "\n");   // Windows 编辑的 CRLF 会让 POSIX shell 把 \r 带进词法
@@ -136,7 +140,7 @@ public static class ShellLauncher
         if (resolved.Length == 0)
             throw new UsageException("缺少要执行的命令（hpass exec [-- 参数…] 或 -f 脚本）");
 
-        var shellName = Path.GetFileName(shell);
+        var shellName = ShellNameOf(shell);
         if (shell == "none")
         {
             psi.FileName = resolved[0];
@@ -164,6 +168,10 @@ public static class ShellLauncher
         }
         return StartAndWait(psi, req, stdoutSink, stderrSink, stdinText: null);
     }
+
+    /// <summary>Windows 文件系统大小写不敏感：统一小写匹配，避免 --shell PowerShell/CMD 落入错误分支。</summary>
+    private static string ShellNameOf(string shellPath) =>
+        OperatingSystem.IsWindows() ? Path.GetFileName(shellPath).ToLowerInvariant() : Path.GetFileName(shellPath);
 
     private static Dictionary<string, string> BuildTokenMap(ExecRequest req, string text)
     {

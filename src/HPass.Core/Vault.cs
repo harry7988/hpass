@@ -175,10 +175,9 @@ public sealed class Vault : IDisposable
         ApplyDirectoryPermissions(RunDir);
         var backupVault = Path.Combine(RunDir, "rotate-backup.vault.json");
         var backupKey = Path.Combine(RunDir, "rotate-backup.master.key");
-        File.WriteAllBytes(backupVault, File.ReadAllBytes(VaultPath));
-        File.WriteAllBytes(backupKey, File.ReadAllBytes(MasterKeyPath));
-        SecureFile.Restrict(backupVault);
-        SecureFile.Restrict(backupKey);
+        // 原子写：备份中途崩溃不能损坏"当前配对副本"（它是中断恢复的唯一依靠）
+        SecureFile.WriteAtomic(backupVault, File.ReadAllBytes(VaultPath));
+        SecureFile.WriteAtomic(backupKey, File.ReadAllBytes(MasterKeyPath));
         var dek = _dek!;
         using var rsa = Crypto.GenerateIdentity();
         Data.Identity = new VaultIdentity { PublicKey = Convert.ToBase64String(Crypto.ExportPublicKey(rsa)) };
@@ -330,14 +329,37 @@ public sealed class Vault : IDisposable
         {
             Directory.CreateDirectory(Path.Combine(dir, "run"));
             var path = Path.Combine(dir, "run", "lock");
+            FileStream fs;
             try
             {
-                return new FileLock(new FileStream(path, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None));
+                fs = new FileStream(path, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
             }
             catch (IOException)
             {
                 throw new VaultException("另一个 hpass 写操作正在进行（run/lock 被占用）");
             }
+            catch (UnauthorizedAccessException)
+            {
+                throw new VaultException($"run/lock 无法访问（属主异常，多为 sudo 运行遗留）：可删除 {path} 后重试，或再运行一次 sudo 命令由其自动归还属主");
+            }
+            try
+            {
+                // Unix 上 FileShare 无跨进程强制力（dotnet/runtime#59995），必须 flock 才是真互斥
+                Hardening.FlockExclusive(fs.SafeFileHandle);
+                // sudo 运行会把 lock 留在 root 名下——立即归还调用用户，避免后续用户态命令永久 EACCES
+                if (Hardening.IsRoot())
+                {
+                    var sudoUser = Environment.GetEnvironmentVariable("SUDO_USER");
+                    if (!string.IsNullOrEmpty(sudoUser))
+                        _ = Hardening.Sh($"chown {Hardening.Q(sudoUser)} {Hardening.Q(path)} 2>/dev/null || true");
+                }
+            }
+            catch
+            {
+                fs.Dispose();
+                throw;
+            }
+            return new FileLock(fs);
         }
         public void Dispose() => _fs.Dispose();
     }

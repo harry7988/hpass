@@ -9,7 +9,7 @@
 |---|---|---|
 | 密码与自定义字段值（明文） | 仅 hpass 进程内存（byte[]，用后清除） | 生存期最短化；不存在明文落盘路径 |
 | vault.json（密文+元数据） | `~/.hpass/vault.json` | AES-256-GCM（AAD 防密文互换）；文件保护（见 §3） |
-| master.key（口令加密的 RSA 私钥） | `~/.hpass/master.key` | PBKDF2-SHA512(210k) + AES-256-GCM；600 |
+| master.key（口令加密的 RSA 私钥） | `~/.hpass/master.key` | PBKDF2-SHA512(600k) + AES-256-GCM；600 |
 | 主口令 | 用户记忆 / `HPASS_PASSPHRASE[_FILE]` | 不落 vault；文件方式要求权限 600 |
 | 脱敏后的命令输出 | stdout/stderr | 即 AI 可见面 |
 
