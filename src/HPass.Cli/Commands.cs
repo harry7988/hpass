@@ -293,7 +293,11 @@ public static class Commands
     /// <summary>内部命令：提权子进程的"密文搬运"（清保护 → 原子覆盖 → 恢复 root 属主与保护）。仅在提权中使用。</summary>
     public static int InstallStaged(CliContext ctx, string[] args)
     {
-        if (args.Length != 2) throw new UsageException("用法（内部）：hpass _install-staged <暂存文件> <最终路径>");
+        // --child-install：由自动提权父进程传入（经 argv——sudo env_reset 不剥离参数）；
+        // 写锁由父进程持有（临界区保护不变），子进程跳过重复获取以免 flock 自锁
+        var childInstall = args.Contains("--child-install");
+        args = args.Where(a => a != "--child-install").ToArray();
+        if (args.Length != 2) throw new UsageException("用法（内部）：hpass _install-staged [--child-install] <暂存文件> <最终路径>");
         var staging = Path.GetFullPath(args[0]);
         var final = Path.GetFullPath(args[1]);
         var stagingRoot = Path.GetFullPath(Path.Combine(ctx.Home, "run", "staging"));
@@ -304,11 +308,8 @@ public static class Commands
         if (!allowed.Contains(final))
             throw new UsageException("安全限制：最终路径只能是 vault.json / master.key / config.json");
 
-        // 手动恢复路径持锁（与并发 set 竞争同一 final 会丢更新）；
-        // 自动提权子进程（HPASS_CHILD_INSTALL=1）跳过——锁由发起安装的父进程持有，flock 下重取会自锁
-        using var _lock = Environment.GetEnvironmentVariable("HPASS_CHILD_INSTALL") != "1"
-            ? Vault.FileLock.Acquire(ctx.Home)
-            : null;
+        // 手动恢复路径持锁（与并发 set 竞争同一 final 会丢更新）；自动提权子进程（--child-install）跳过
+        using var _lock = childInstall ? null : Vault.FileLock.Acquire(ctx.Home);
 
         var sudoUser = Environment.GetEnvironmentVariable("SUDO_USER");
         if (Hardening.IsRoot())
