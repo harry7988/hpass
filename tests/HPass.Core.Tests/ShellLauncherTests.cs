@@ -168,11 +168,16 @@ public class ShellLauncherTests : IDisposable
         if (!Unix) return;
         try { ShellLauncher.ResolveShell("pwsh"); }
         catch (UsageException) { return; }
-        // 引号包裹的命令名（含元字符路径）经 & 调用运算符执行——& 必须在 prelude 之后
+        // 引号包裹的命令名（含空格路径）经 & 调用运算符执行——& 必须在 prelude 之后
+        var spaced = Path.Combine(_tmp, "spaced dir");
+        Directory.CreateDirectory(spaced);
+        var echoCopy = Path.Combine(spaced, "my echo");
+        File.WriteAllText(echoCopy, "#!/bin/sh\nexec /bin/echo \"$@\"\n");
+        File.SetUnixFileMode(echoCopy, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
         var values = new Dictionary<string, string> { ["{{v}}"] = "ok" };
         var req = new ExecRequest
         {
-            Args = ["/bin/echo", "{{v}}"],
+            Args = [echoCopy, "{{v}}"],
             Shell = "pwsh",
             TimeoutSeconds = 15,
             Resolve = t => values[t],
@@ -183,6 +188,20 @@ public class ShellLauncherTests : IDisposable
         var result = ShellLauncher.Run(req, stdout, stderr);
         Assert.Equal(0, result.ExitCode);
         Assert.Contains("ok", Encoding.UTF8.GetString(stdout.ToArray()));
+    }
+
+    [Fact]
+    public void ScriptMode_Pwsh_SuccessfulNativeThenFailingCmdlet_NonZeroExit()
+    {
+        if (!Unix) return;
+        try { ShellLauncher.ResolveShell("pwsh"); }
+        catch (UsageException) { return; }
+        // 成功原生残留 $LASTEXITCODE=0 + 末条 cmdlet 失败：$? 优先的合成公式必须给非 0（防假成功）
+        var script = Path.Combine(_tmp, "mix.ps1");
+        File.WriteAllText(script, "/bin/echo ok\nGet-Item /hpass-missing-xyz-9\n");
+        var (exit, output) = Run(Script(script, "pwsh"));
+        Assert.NotEqual(0, exit);
+        Assert.Contains("ok", output);
     }
 
     [Fact]
