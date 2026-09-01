@@ -250,7 +250,7 @@ public static class SecureFile
         // 2) 交互终端：sudo 自行提示密码（写入 /dev/tty，不经 argv）；用户输密码可能远超 10s，放宽超时
         if (!Console.IsInputRedirected)
         {
-            var (code2, _, _) = Hardening.RunCapture("sudo", ["--", exe, .. args], showOutput: true, timeoutMs: 300_000,
+            var (code2, _, _) = Hardening.RunCaptureEx("sudo", ["--", exe, .. args], timeoutMs: 300_000,
                 configure: psi => psi.Environment["HPASS_CHILD_INSTALL"] = "1");
             if (code2 == 0) return;
         }
