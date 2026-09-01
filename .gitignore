@@ -8,7 +8,7 @@ publish/
 .idea/
 
 # 测试与本地运行产物
-*.hpass
+*.pwhide
 TestResults/
 
 # 系统文件

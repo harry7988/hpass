@@ -1,4 +1,4 @@
-# h-password (hpass) 完整开发计划
+# pwhide (pwhide) 完整开发计划
 
 > 一个面向 AI 编程工具的本地密码代填 CLI：AI 只看到占位符和执行结果，密码永远不进入对话上下文。
 > 技术形态：C# Native AOT 单文件二进制，跨 macOS / Linux / Windows。
@@ -10,7 +10,7 @@
 | # | 需求 | 对应设计 |
 |---|------|----------|
 | 1 | 包装 pwsh/cmd/bash/sh 脚本 | 执行引擎支持 shell 自动探测与显式指定（§7） |
-| 2 | 代理执行含用户名密码的命令 | `hpass exec`：占位符填充 → 执行 → 结果返回（§6/§7） |
+| 2 | 代理执行含用户名密码的命令 | `pwhide exec`：占位符填充 → 执行 → 结果返回（§6/§7） |
 | 3 | 跨平台 AI TOOL 密码填充工具 | .NET AOT 六个 RID 产物（§8），附带"AI 使用契约"（§3.1） |
 | 4 | 预先录入、加密本地存放、不进上下文 | 非对称混合加密 vault，无任何明文输出命令（§4/§5） |
 | 5 | 调用便捷 | 一条命令完成填充+执行+脱敏返回（§6） |
@@ -36,13 +36,13 @@
 ## 2. 威胁模型（如实声明）
 
 **防护目标**：
-- 密码进入 AI 对话上下文、终端回显、日志、shell history（命令由 hpass 直接 spawn，history 只记录占位符版本）。
+- 密码进入 AI 对话上下文、终端回显、日志、shell history（命令由 pwhide 直接 spawn，history 只记录占位符版本）。
 - vault 文件被拷贝、同步网盘、误提交到 git 后泄露（没有私钥不可解）。
 - 用户态进程（含 AI 起的子进程）对 vault/master.key 的修改、替换、删除 —— 加固模式（§5.1）下任何写动作都触发 OS 提权确认（sudo/UAC），人在环。
 
 **明确不防护**：
 - 恶意 Agent 主动构造变换（如 `echo {{db}} | base64`）绕过脱敏外传 —— 这属于恶意软件范畴，工具定位是"防意外泄露"；M5 可加 risky-pattern lint 缓解。
-- 持有 root/Administrator 的攻击者（平台保护标志可被其清除）：现有条目的局部篡改会被 AEAD 认证必然发现，整体重造 vault 可经 `hpass list` 察觉条目异常，但不做进一步对抗。
+- 持有 root/Administrator 的攻击者（平台保护标志可被其清除）：现有条目的局部篡改会被 AEAD 认证必然发现，整体重造 vault 可经 `pwhide list` 察觉条目异常，但不做进一步对抗。
 - 内存 dump、ptrace 调试。
 - 内联参数模式下，密码在子进程运行期间可通过 `ps` 短暂可见 —— 通过 env 注入 / 脚本 stdin 两种更安全模式缓解并文档明示。
 
@@ -53,9 +53,9 @@
 ```
 AI 工具 (Claude Code / Cursor / …)                 人（一次性录入）
         │                                                 │
-        │ hpass exec -- mysql -u {{db.user}} …            │ hpass set db
+        │ pwhide exec -- mysql -u {{db.user}} …            │ pwhide set db
         ▼                                                 ▼
-┌────────────────────── hpass（单文件 AOT 二进制）──────────────────────┐
+┌────────────────────── pwhide（单文件 AOT 二进制）──────────────────────┐
 │  参数/脚本 → 占位符解析 → vault 解密(仅内存) → 命令组装 → spawn 子进程  │
 │                                   ▲                                   │
 │              输出流式脱敏 ←────────┴── stdin/stdout/stderr 转发        │
@@ -64,12 +64,12 @@ AI 工具 (Claude Code / Cursor / …)                 人（一次性录入）
 
 ### 3.1 三种填充/执行模式（安全性递增）
 
-1. **args 内联模式**：`hpass exec -- mysql -u {{db.user}} -p{{db}} -e "…"`
+1. **args 内联模式**：`pwhide exec -- mysql -u {{db.user}} -p{{db}} -e "…"`
    兼容性最好；缺点：密码进入子进程 argv，`ps` 短暂可见。
-2. **环境变量注入模式（推荐）**：`hpass exec --env db:MYSQL_PWD -- mysql -u root -e "…"`
+2. **环境变量注入模式（推荐）**：`pwhide exec --env db:MYSQL_PWD -- mysql -u root -e "…"`
    密码只进 child 环境变量，argv 与 `ps` 不可见。预置常见工具约定（MYSQL_PWD、PGPASSWORD 等）文档。
-3. **脚本 stdin 模式（脚本包装的主推方式）**：`hpass exec -f deploy.sh --shell auto`
-   脚本文件里写 `{{db}}`，hpass 读文件 → 内存中替换 → 通过 stdin 交给 `bash -s` / `pwsh -Command -`。
+3. **脚本 stdin 模式（脚本包装的主推方式）**：`pwhide exec -f deploy.sh --shell auto`
+   脚本文件里写 `{{db}}`，pwhide 读文件 → 内存中替换 → 通过 stdin 交给 `bash -s` / `pwsh -Command -`。
    密码不落盘、不进 argv，ps 不可见。
 
 ### 3.2 AI 工具使用契约（交付物之一，写入 README，可粘贴进 AGENTS.md/CLAUDE.md）
@@ -77,9 +77,9 @@ AI 工具 (Claude Code / Cursor / …)                 人（一次性录入）
 ```
 当需要执行包含密码的命令时：
 1. 永远不要向用户索要真实密码，用 {{条目名}} 占位；
-2. 不确定有哪些凭据可用时，先 `hpass list --json` 查询（可见：账号类型、账号、租户、自定义字段名；不可见：密码与字段值）；
-3. 通过 `hpass exec -- <命令>` 执行，hpass 会自动填充并返回结果；
-4. 报"未知条目"（退出码 4）时，若无该条目则请用户本人运行 `hpass set <名字>` 录入；
+2. 不确定有哪些凭据可用时，先 `pwhide list --json` 查询（可见：账号类型、账号、租户、自定义字段名；不可见：密码与字段值）；
+3. 通过 `pwhide exec -- <命令>` 执行，pwhide 会自动填充并返回结果；
+4. 报"未知条目"（退出码 4）时，若无该条目则请用户本人运行 `pwhide set <名字>` 录入；
 5. 输出中出现的 {{条目名}} 即为被脱敏的密码，属正常现象。
 ```
 
@@ -103,7 +103,7 @@ AI 工具 (Claude Code / Cursor / …)                 人（一次性录入）
   1. `set` 录入只需公钥 —— 可在 CI 或其他机器上向 vault 写入"写入方自己也读不出"的密码；
   2. 密钥轮换只重包裹 DEK，不需重加密全部条目；
   3. 为将来多设备同步留出架构空间。
-- **口令（私钥解锁）来源优先级**：交互隐藏输入 > `HPASS_PASSPHRASE_FILE`（文件权限 600）> `HPASS_PASSPHRASE` 环境变量（自动化/AI 非交互场景）。M5 增加 OS keychain 与 agent 常驻解锁。
+- **口令（私钥解锁）来源优先级**：交互隐藏输入 > `PWHIDE_PASSPHRASE_FILE`（文件权限 600）> `PWHIDE_PASSPHRASE` 环境变量（自动化/AI 非交互场景）。M5 增加 OS keychain 与 agent 常驻解锁。
 - **内存卫生**：解密结果停留在 `byte[]`，用后 `Array.Clear`； unavoidable 的 string 使用后尽快脱离引用（.NET string 不可清零，文档如实说明残余风险）。
 
 ### 4.2 密码学原语清单（全部 .NET 内置，零第三方依赖）
@@ -121,10 +121,10 @@ AI 工具 (Claude Code / Cursor / …)                 人（一次性录入）
 
 ## 5. Vault 存储设计
 
-**目录布局 — 基础模式**（Unix：`~/.hpass/`；Windows：`%USERPROFILE%\.hpass\`；目录 0700，文件 0600，Windows 设置 ACL 仅当前用户）：
+**目录布局 — 基础模式**（Unix：`~/.pwhide/`；Windows：`%USERPROFILE%\.pwhide\`；目录 0700，文件 0600，Windows 设置 ACL 仅当前用户）：
 
 ```
-~/.hpass/
+~/.pwhide/
 ├── vault.json     # 条目库（可安全被同步/备份，无私钥不可解）
 ├── master.key     # RSA 私钥（口令加密后的密文）
 ├── config.json    # 默认 shell、超时等
@@ -164,7 +164,7 @@ AI 工具 (Claude Code / Cursor / …)                 人（一次性录入）
   "kdf": { "algo": "PBKDF2-SHA512", "iterations": 210000, "salt": "b64(16B)" },
   "alg": "AES-256-GCM",
   "nonce": "b64(12B)",
-  "ct": "b64(PKCS8(RSA-3072), AAD=\"hpass/master.key\")"
+  "ct": "b64(PKCS8(RSA-3072), AAD=\"pwhide/master.key\")"
 }
 ```
 
@@ -173,7 +173,7 @@ AI 工具 (Claude Code / Cursor / …)                 人（一次性录入）
 - 每个自定义字段值独立 AEAD，AAD 绑定"条目名+字段名"，防字段间密文互换；`user`、`tenant` 为保留字段名。
 
 - **并发**：set/delete/rename 持独占锁；exec 只读，读到不一致（GCM 校验失败）时报错而非半执行。
-- **条目名**：字符集 `[A-Za-z0-9_.-]`，不区分大小写存储、区分大小写匹配（`hpass list` 展示原名）。
+- **条目名**：字符集 `[A-Za-z0-9_.-]`，不区分大小写存储、区分大小写匹配（`pwhide list` 展示原名）。
 
 ### 5.1 特权加固模式（hardened）—— 管理员权限写保护
 
@@ -199,16 +199,16 @@ AI 工具 (Claude Code / Cursor / …)                 人（一次性录入）
 
 | 命令 | 作用 | 关键点 |
 |---|---|---|
-| `hpass init [--no-harden]` | 生成密钥对 + 空 vault | 默认启用特权加固（§5.1），创建时请求 sudo/UAC；`--no-harden` 降级基础模式；口令两次确认；RSA keygen 约 1-2 秒属正常 |
-| `hpass set <name> [-t <类型>] [-u <账号>] [-T <租户>] [-f <字段=值>…]` | 录入/更新条目 | 密码走隐藏输入（termios/SetConsoleMode P/Invoke）；**禁止**命令行明文传密码（防 history），自定义字段敏感值同样走隐藏输入/`-f` 读环境变量；支持 `-` 从 stdin 读；加固模式下为特权操作（自动请求提权，仅密文移动） |
-| `hpass list [--json]` | 列出全部条目 | 输出明文元数据：条目名/类型/账号/租户/字段名列表 + 更新时间；**永不显示密码与字段值** —— 这是 AI 的主查询接口 |
-| `hpass inspect <name> [--json]` | 查看单个条目元数据 | 同上，粒度到单条目；含 `hasPassword` 标记与可用占位符清单 |
-| `hpass delete <name>` / `hpass rename <old> <new>` | 管理 | rename 后需重加密（AAD 变化）；特权操作（自动请求提权） |
-| `hpass exec [options] -- <cmd...>` | **核心**：填充+执行+脱敏 | 见下 |
-| `hpass exec -f <script> [options]` | 脚本 stdin 模式 | 脚本内占位符替换后经 stdin 执行 |
-| `hpass rotate` | 更换密钥对 | 只重包裹 DEK；特权操作 |
-| `hpass doctor` | 环境自检 | shell 探测、加固状态与中断恢复检查、平台信息 |
-| `hpass version` | 版本 | — |
+| `pwhide init [--no-harden]` | 生成密钥对 + 空 vault | 默认启用特权加固（§5.1），创建时请求 sudo/UAC；`--no-harden` 降级基础模式；口令两次确认；RSA keygen 约 1-2 秒属正常 |
+| `pwhide set <name> [-t <类型>] [-u <账号>] [-T <租户>] [-f <字段=值>…]` | 录入/更新条目 | 密码走隐藏输入（termios/SetConsoleMode P/Invoke）；**禁止**命令行明文传密码（防 history），自定义字段敏感值同样走隐藏输入/`-f` 读环境变量；支持 `-` 从 stdin 读；加固模式下为特权操作（自动请求提权，仅密文移动） |
+| `pwhide list [--json]` | 列出全部条目 | 输出明文元数据：条目名/类型/账号/租户/字段名列表 + 更新时间；**永不显示密码与字段值** —— 这是 AI 的主查询接口 |
+| `pwhide inspect <name> [--json]` | 查看单个条目元数据 | 同上，粒度到单条目；含 `hasPassword` 标记与可用占位符清单 |
+| `pwhide delete <name>` / `pwhide rename <old> <new>` | 管理 | rename 后需重加密（AAD 变化）；特权操作（自动请求提权） |
+| `pwhide exec [options] -- <cmd...>` | **核心**：填充+执行+脱敏 | 见下 |
+| `pwhide exec -f <script> [options]` | 脚本 stdin 模式 | 脚本内占位符替换后经 stdin 执行 |
+| `pwhide rotate` | 更换密钥对 | 只重包裹 DEK；特权操作 |
+| `pwhide doctor` | 环境自检 | shell 探测、加固状态与中断恢复检查、平台信息 |
+| `pwhide version` | 版本 | — |
 
 **`exec` 选项**：
 
@@ -275,18 +275,18 @@ AI 工具 (Claude Code / Cursor / …)                 人（一次性录入）
 ## 9. 仓库结构
 
 ```
-h-password/
+pwhide/
 ├── src/
-│   ├── HPass.Core/            # Vault、Crypto、PlaceholderParser、Redactor、ShellLauncher
-│   └── HPass.Cli/             # Program.cs、命令分发、隐藏输入 P/Invoke
+│   ├── PwHide.Core/            # Vault、Crypto、PlaceholderParser、Redactor、ShellLauncher
+│   └── PwHide.Cli/             # Program.cs、命令分发、隐藏输入 P/Invoke
 ├── tests/
-│   ├── HPass.Core.Tests/      # 单元测试
-│   └── HPass.IntegrationTests/ # 真实 shell 矩阵测试（按 OS 条件编译启用）
+│   ├── PwHide.Core.Tests/      # 单元测试
+│   └── PwHide.IntegrationTests/ # 真实 shell 矩阵测试（按 OS 条件编译启用）
 ├── docs/
 │   ├── ai-deploy-guide.md     # AI 部署/使用指南（含条目模型与查询接口）✅ 已建
 │   ├── threat-model.md        # 威胁模型（防什么/不防什么/加固语义/密码学参数）✅ 已建
 │   └── usage.md               # 面向人的使用说明
-├── skills/hpass/               # AI Skill（SKILL.md + install.sh），README 有安装说明 ✅ 已建
+├── skills/pwhide/               # AI Skill（SKILL.md + install.sh），README 有安装说明 ✅ 已建
 ├── .github/workflows/          # ci.yml（三平台测试+AOT 冒烟）、release.yml
 ├── LICENSE（MIT）/ README.md   # ✅ 已建
 └── PLAN.md
@@ -308,7 +308,7 @@ h-password/
 
 **安全回归用例（CI 必须常绿）**：未知占位符拒跑（I2）、输出脱敏（I3）、错误信息无 secret（I5）、vault 拷贝到无钥环境不可解（I4）、用户态写 vault 被拒且不产生半写状态（I6）、list/inspect 输出不含密码与字段值（I1）。
 
-**CI**：GitHub Actions matrix `[macos-latest, ubuntu-latest, windows-latest]`：单测 + `PublishAot` 产物运行 `hpass version` 冒烟。托管 runner 自带 passwordless sudo / 管理员权限，可完整覆盖加固流程测试。
+**CI**：GitHub Actions matrix `[macos-latest, ubuntu-latest, windows-latest]`：单测 + `PublishAot` 产物运行 `pwhide version` 冒烟。托管 runner 自带 passwordless sudo / 管理员权限，可完整覆盖加固流程测试。
 
 ---
 
@@ -316,12 +316,12 @@ h-password/
 
 | 里程碑 | 内容 | 验收标准 | 状态（2026-09-01） |
 |---|---|---|---|
-| **M0** 工程底座（1-2 天） | solution、双项目、CI 三平台、AOT 发布管线骨架 | 三平台 AOT 产物可运行 `hpass version` | ✅ 完成（CI 六任务全绿：三平台构建测试 + 三平台 AOT 冒烟） |
+| **M0** 工程底座（1-2 天） | solution、双项目、CI 三平台、AOT 发布管线骨架 | 三平台 AOT 产物可运行 `pwhide version` | ✅ 完成（CI 六任务全绿：三平台构建测试 + 三平台 AOT 冒烟） |
 | **M1** 保险库（3-5 天） | init/set/inspect/list/delete/rename + 扩展条目模型（类型/账号/租户/自定义字段）+ 全套加密 + 单测（基础权限模式，加固在 M3） | roundtrip 通过；错误口令拒绝；文件权限正确；篡改检测；list/inspect 无密文值泄露 | ✅ 完成（单测 + 集成覆盖，三平台 CI 通过） |
 | **M2** 执行引擎（4-6 天） | exec 三模式、shell 矩阵、流式脱敏、env 注入、超时、退出码 | 集成测试矩阵全绿；`echo {{db}}` 输出已脱敏；env 模式 ps 不可见 | ✅ 完成（bash/sh/pwsh 实测 + Windows auto→pwsh 实测修复 .exe 探测 bug；env 注入 argv 干净） |
 | **M3** 特权加固（2-4 天） | §5.1 全平台：root/Admin 属主、不可变标志 / ACL、提权原子覆盖、中断恢复、doctor 检测与降级 | 用户态写 vault 必被拒；提权覆盖与恢复流程通过；WSL / 无 sudo 环境优雅降级 | ✅ 完成（vault 唯一写入口 = staged 安装：清保护→原子覆盖→重加保护；用户级 uchg 本地全链路测试；root 属主 + schg/+i 由 CI AOT 冒烟以真实 sudo 验证（自动 `-n` 优先、交互兜底、`_install-staged` 仅搬运密文且有路径白名单）；doctor 清理 staging 残留 + 中断保护自动补齐；提权失败无半写、暂存仅密文；Windows icacls 指引） |
 | **M4** 发布与文档（2-3 天） | README/AI 指引随开发完善、threat-model、release workflow（README、LICENSE、AI 部署指南已前置完成） | 三平台二进制 + 校验和发布；新机器 5 分钟上手 | ✅ 完成（ci.yml 三平台全绿含 root 加固流程；threat-model.md 已写；release.yml 于 v* tag 触发，六 RID 产物 + SHA256SUMS 创建 GitHub Release） |
-| **M5** 增强（按需） | OS keychain 解锁、agent 常驻、rotate、export/import、MCP server（`hpass mcp` 暴露 `credentialed_exec` 工具）、Argon2id、risky-pattern lint | 按特性单独验收 | ⬜ 按需（rotate 已提前实现并有测试） |
+| **M5** 增强（按需） | OS keychain 解锁、agent 常驻、rotate、export/import、MCP server（`pwhide mcp` 暴露 `credentialed_exec` 工具）、Argon2id、risky-pattern lint | 按特性单独验收 | ⬜ 按需（rotate 已提前实现并有测试） |
 
 ---
 
@@ -345,11 +345,11 @@ h-password/
 
 ## 13. 待确认决策点（默认值已给出，可推翻）
 
-1. CLI 二进制名：**`hpass`**（可换）。
-2. 占位符语法：**`{{name}}` / `{{name.user}}`**（备选 `$HPASS_name`）。
+1. CLI 二进制名：**`pwhide`**（可换）。
+2. 占位符语法：**`{{name}}` / `{{name.user}}`**（备选 `$PWHIDE_name`）。
 3. v1 解锁方式：口令（交互 / 文件 / 环境变量），OS keychain 放 M5 —— 是否需要提前？
-4. 是否需要面向人类的取密途径（如 `hpass clip` 复制到剪贴板）？v1 默认**不做**以收紧攻击面。
-5. MCP server（`hpass mcp`）是否进 M5 范围？
+4. 是否需要面向人类的取密途径（如 `pwhide clip` 复制到剪贴板）？v1 默认**不做**以收紧攻击面。
+5. MCP server（`pwhide mcp`）是否进 M5 范围？
 6. 目标框架：.NET 10（默认）还是 .NET 8（企业约束）？
 7. 特权加固默认开启？（推荐 `init` 默认请求提权加固，环境不支持时询问降级；`--no-harden` 显式选择基础模式）
 

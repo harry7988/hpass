@@ -29,7 +29,7 @@ jobs:
         if: failure()
         shell: bash
         run: |
-          git config user.name ci-bot && git config user.email ci@hpass.local
+          git config user.name ci-bot && git config user.email ci@pwhide.local
           mkdir -p diagnostics
           cp test.log "diagnostics/test-${{ matrix.os }}.log"
           git add diagnostics
@@ -52,7 +52,7 @@ jobs:
         with:
           dotnet-version: 10.0.x
       - name: Publish Native AOT
-        run: dotnet publish src/HPass.Cli -c Release -r ${{ matrix.rid }} /p:PublishAot=true -o publish
+        run: dotnet publish src/PwHide.Cli -c Release -r ${{ matrix.rid }} /p:PublishAot=true -o publish
       - name: Smoke test binary
         shell: bash
         run: |
@@ -61,38 +61,38 @@ jobs:
           uname -a || true
           command -v sh bash pwsh cmd.exe 2>/dev/null || true
           echo "== run =="
-          export HPASS_SMOKE="$RUNNER_TEMP/hpass-smoke"
-          rm -rf "$HPASS_SMOKE"
-          if [ "${{ matrix.rid }}" = "win-x64" ]; then B=publish/hpass.exe; else B=publish/hpass; fi
+          export PWHIDE_SMOKE="$RUNNER_TEMP/pwhide-smoke"
+          rm -rf "$PWHIDE_SMOKE"
+          if [ "${{ matrix.rid }}" = "win-x64" ]; then B=publish/pwhide.exe; else B=publish/pwhide; fi
           echo "B=$B"
           "$B" version; echo "version-exit=$?"
-          HPASS_PASSPHRASE=ci-pass-123 "$B" --home "$HPASS_SMOKE" init --no-harden; echo "init-exit=$?"
-          echo ci-secret-9 | HPASS_PASSPHRASE=ci-pass-123 "$B" --home "$HPASS_SMOKE" set db -u root --password-stdin; echo "set-exit=$?"
-          OUT=$(HPASS_PASSPHRASE=ci-pass-123 "$B" --home "$HPASS_SMOKE" exec --allow-echo -- sh -c 'echo {{db}}'); echo "exec-exit=$? exec-out=[$OUT]"
+          PWHIDE_PASSPHRASE=ci-pass-123 "$B" --home "$PWHIDE_SMOKE" init --no-harden; echo "init-exit=$?"
+          echo ci-secret-9 | PWHIDE_PASSPHRASE=ci-pass-123 "$B" --home "$PWHIDE_SMOKE" set db -u root --password-stdin; echo "set-exit=$?"
+          OUT=$(PWHIDE_PASSPHRASE=ci-pass-123 "$B" --home "$PWHIDE_SMOKE" exec --allow-echo -- sh -c 'echo {{db}}'); echo "exec-exit=$? exec-out=[$OUT]"
           printf '%s' "$OUT" | grep -F '{{db}}'
 
           # M3 特权加固真实 root 流程（runner 具备免密 sudo；Windows 跳过）
           if [ "${{ matrix.rid }}" != "win-x64" ]; then
             echo "== root harden flow =="
-            sudo -n "$B" --home "$HPASS_SMOKE" harden; echo "harden-exit=$?"
-            if [ -w "$HPASS_SMOKE/vault.json" ]; then echo "FAIL: 加固后 vault.json 仍可写"; exit 1; fi
+            sudo -n "$B" --home "$PWHIDE_SMOKE" harden; echo "harden-exit=$?"
+            if [ -w "$PWHIDE_SMOKE/vault.json" ]; then echo "FAIL: 加固后 vault.json 仍可写"; exit 1; fi
             # set 在管理员写保护下自动经 sudo 搬运安装（清保护 → 原子覆盖 → 重新加保护）
-            echo root-secret-88 | HPASS_PASSPHRASE=ci-pass-123 "$B" --home "$HPASS_SMOKE" set db3 -u u3 --password-stdin; echo "set3-exit=$?"
-            HPASS_PASSPHRASE=ci-pass-123 "$B" --home "$HPASS_SMOKE" list --json | grep -F '"name": "db3"'
+            echo root-secret-88 | PWHIDE_PASSPHRASE=ci-pass-123 "$B" --home "$PWHIDE_SMOKE" set db3 -u u3 --password-stdin; echo "set3-exit=$?"
+            PWHIDE_PASSPHRASE=ci-pass-123 "$B" --home "$PWHIDE_SMOKE" list --json | grep -F '"name": "db3"'
             # exec 读路径无需提权 + 输出脱敏
-            OUT3=$(HPASS_PASSPHRASE=ci-pass-123 "$B" --home "$HPASS_SMOKE" exec --allow-echo -- sh -c 'echo {{db3}}'); echo "exec3-exit=$? exec3-out=[$OUT3]"
+            OUT3=$(PWHIDE_PASSPHRASE=ci-pass-123 "$B" --home "$PWHIDE_SMOKE" exec --allow-echo -- sh -c 'echo {{db3}}'); echo "exec3-exit=$? exec3-out=[$OUT3]"
             printf '%s' "$OUT3" | grep -F '{{db3}}'
-            if [ "${{ matrix.rid }}" = "osx-arm64" ]; then sudo -n chflags -R noschg "$HPASS_SMOKE" 2>/dev/null || true; fi
-            if [ "${{ matrix.rid }}" = "linux-x64" ]; then sudo -n chattr -i "$HPASS_SMOKE/vault.json" "$HPASS_SMOKE/master.key" 2>/dev/null || true; fi
-            rm -rf "$HPASS_SMOKE" 2>/dev/null || sudo -n rm -rf "$HPASS_SMOKE"
+            if [ "${{ matrix.rid }}" = "osx-arm64" ]; then sudo -n chflags -R noschg "$PWHIDE_SMOKE" 2>/dev/null || true; fi
+            if [ "${{ matrix.rid }}" = "linux-x64" ]; then sudo -n chattr -i "$PWHIDE_SMOKE/vault.json" "$PWHIDE_SMOKE/master.key" 2>/dev/null || true; fi
+            rm -rf "$PWHIDE_SMOKE" 2>/dev/null || sudo -n rm -rf "$PWHIDE_SMOKE"
           else
-            rm -rf "$HPASS_SMOKE"
+            rm -rf "$PWHIDE_SMOKE"
           fi
       - name: Publish failure diagnostics
         if: failure()
         shell: bash
         run: |
-          git config user.name ci-bot && git config user.email ci@hpass.local
+          git config user.name ci-bot && git config user.email ci@pwhide.local
           mkdir -p diagnostics
           cp smoke-full.log "diagnostics/aot-${{ matrix.rid }}.log" || true
           git add diagnostics || true

@@ -32,21 +32,21 @@ jobs:
           dotnet-version: 10.0.x
       - name: Publish Native AOT
         shell: bash
-        run: dotnet publish src/HPass.Cli -c Release -r ${{ matrix.rid }} -p:PublishAot=true -o publish
+        run: dotnet publish src/PwHide.Cli -c Release -r ${{ matrix.rid }} -p:PublishAot=true -o publish
         # 注意：此步骤为 bash，-p: 形式避免 Windows 上 MSYS 把 /p: 当 POSIX 路径转换
       - name: Pack
         shell: bash
         run: |
           cd publish
           if [[ "${{ matrix.rid }}" == win-* ]]; then
-            7z a "../hpass-${{ matrix.rid }}.zip" hpass.exe
+            7z a "../pwhide-${{ matrix.rid }}.zip" pwhide.exe
           else
-            tar czf "../hpass-${{ matrix.rid }}.tar.gz" hpass
+            tar czf "../pwhide-${{ matrix.rid }}.tar.gz" pwhide
           fi
       - uses: actions/upload-artifact@v4
         with:
-          name: hpass-${{ matrix.rid }}
-          path: hpass-${{ matrix.rid }}.*
+          name: pwhide-${{ matrix.rid }}
+          path: pwhide-${{ matrix.rid }}.*
 
   release:
     name: Create GitHub Release
@@ -57,11 +57,11 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
-          pattern: hpass-*
+          pattern: pwhide-*
           path: dist
           merge-multiple: true
       - name: Checksums
-        run: cd dist && sha256sum hpass-* | tee SHA256SUMS && ls -la
+        run: cd dist && sha256sum pwhide-* | tee SHA256SUMS && ls -la
       - name: Create release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -73,20 +73,20 @@ jobs:
           ## 安装
           1. 下载对应平台压缩包，校验：`shasum -a 256 --check SHA256SUMS --ignore-missing`
           2. 解压后放入 PATH（如 /usr/local/bin）
-          3. AI 部署 runbook：docs/ai-deploy-guide.md；AI Skill 安装：skills/hpass/install.sh
+          3. AI 部署 runbook：docs/ai-deploy-guide.md；AI Skill 安装：skills/pwhide/install.sh
 
           ## 快速上手
-          hpass init → hpass set db -t database -u root -T prod → hpass exec -- mysql -u {{db.user}} -p{{db}} …
+          pwhide init → pwhide set db -t database -u root -T prod → pwhide exec -- mysql -u {{db.user}} -p{{db}} …
           （密码只在加密库与子进程间流动，永不进入 AI 对话上下文）
           EOF
           sed -i 's/^          //' release-notes.md
           echo "TAG=$TAG"; ls dist
-          gh release create "$TAG" dist/* --title "hpass $TAG" --generate-notes --notes-file release-notes.md 2>&1 | tee gh-release.log
+          gh release create "$TAG" dist/* --title "pwhide $TAG" --generate-notes --notes-file release-notes.md 2>&1 | tee gh-release.log
           exit ${PIPESTATUS[0]}
       - name: Publish failure diagnostics
         if: failure()
         run: |
-          git config user.name ci-bot && git config user.email ci@hpass.local
+          git config user.name ci-bot && git config user.email ci@pwhide.local
           mkdir -p diagnostics
           cp gh-release.log diagnostics/ 2>/dev/null || true
           git add diagnostics || true
