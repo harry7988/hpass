@@ -24,7 +24,13 @@ docker run --rm -v "$REPO":/src:ro "$IMAGE" bash -euxo pipefail -c '
   APT=""
   command -v sudo >/dev/null || APT="sudo"
   command -v clang >/dev/null || APT="$APT clang zlib1g-dev"
-  [ -n "$APT" ] && (apt-get update -qq && apt-get install -y -qq $APT >/dev/null)
+  if [ -n "$APT" ]; then
+    # 默认源在国内/代理网络常不可达：优先切换清华 arm64 源，失败再回退官方源
+    sed -i "s|http://ports.ubuntu.com/ubuntu-ports|https://mirrors.tuna.tsinghua.edu.cn/ubuntu-ports|g" /etc/apt/sources.list 2>/dev/null
+    echo "Acquire::http::Timeout \"8\"; Acquire::Retries \"2\";" > /etc/apt/apt.conf.d/99timeout
+    apt-get update -qq || { sed -i "s|https://mirrors.tuna.tsinghua.edu.cn/ubuntu-ports|http://ports.ubuntu.com/ubuntu-ports|g" /etc/apt/sources.list; apt-get update -qq; }
+    apt-get install -y -qq $APT >/dev/null
+  fi
   useradd -m -s /bin/bash tester 2>/dev/null || true
   echo "tester ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/tester
   case "$(uname -m)" in aarch64) RID=linux-arm64;; *) RID=linux-x64;; esac
