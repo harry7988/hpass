@@ -391,8 +391,26 @@ public static class Commands
 
     public static int Doctor(CliContext ctx, string[] args)
     {
+        // --output-encoding <auto|utf8|utf16|gbk|json>：全局手工指定输出编码（兜底方案，防终端/管道解码不匹配）
+        for (var i = 0; i < args.Length; i++)
+        {
+            if (args[i] is "--output-encoding")
+            {
+                if (++i >= args.Length) throw new UsageException("--output-encoding 需要 <auto|utf8|utf16|gbk|json>");
+                var mode = OutputChannel.NormalizeOverride(args[i])
+                    ?? throw new UsageException($"无效的输出编码：{args[i]}（可用 auto|utf8|utf16|gbk|json；json = 非 ASCII 转义为 \\uXXXX，任何终端可读）");
+                Directory.CreateDirectory(ctx.Home);
+                var file = Path.Combine(ctx.Home, OutputChannel.FileName);
+                File.WriteAllText(file, mode);
+                ctx.OutText.WriteLine($"输出编码 : 已全局指定为 {mode}（{file}，对所有 pwhide 命令生效；删除该文件或改回 auto 恢复自动检测）");
+            }
+            else throw new UsageException($"未知的 doctor 选项：{args[i]}");
+        }
+
         ctx.OutText.WriteLine($"home     : {ctx.Home}");
         ctx.OutText.WriteLine($"platform : {System.Runtime.InteropServices.RuntimeInformation.OSDescription} {System.Runtime.InteropServices.RuntimeInformation.OSArchitecture}");
+        foreach (var line in OutputChannel.Describe(ctx.Home))
+            ctx.OutText.WriteLine(line);
         var ok = true;
 
         // 安装残留报告：必须在 Vault.Exists 判断之外——"final 缺失、orig 是旧库唯一副本"的恢复场景恰在此

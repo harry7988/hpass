@@ -10,27 +10,15 @@ public sealed class CliContext
     public required TextReader In { get; init; }
     public bool Interactive { get; init; } = true;
     public string Home { get; set; } = Vault.DefaultHome();
-    /// <summary>Out/Err 是否为真实控制台句柄（Windows 下走 WriteConsoleW，中文 cmd 不乱码；重定向/管道/测试内存流恒为 UTF-8）。</summary>
-    internal bool OutIsConsole { get; init; }
-    internal bool ErrIsConsole { get; init; }
+    /// <summary>Out/Err 是否为进程标准句柄（真实 CLI 运行）。Windows 下按句柄类型选通道：控制台→WriteConsoleW、
+    /// 管道→按会话控制台代码页转码、文件→UTF-8；测试传入内存流恒 false → 恒 UTF-8（除非显式配置覆盖）。</summary>
+    internal bool OutIsStd { get; init; }
+    internal bool ErrIsStd { get; init; }
 
     private TextWriter? _outText;
     private TextWriter? _errText;
-    public TextWriter OutText => _outText ??= NewWriter(Out, OutIsConsole, stderr: false);
-    public TextWriter ErrText => _errText ??= NewWriter(Err, ErrIsConsole, stderr: true);
-
-    private static readonly UTF8Encoding Utf8NoBom = new(false);
-
-    /// <summary>
-    /// 输出编码/通道选择：真实 Windows 控制台 → WriteConsoleW（UTF-16 直写，与控制台代码页无关，
-    /// 亦不依赖 InvariantGlobalization 下不可用的代码页转码；OpenStandardOutput 直写 UTF-8 到
-    /// GBK 控制台会产生"鏈壘鍒?"式乱码）；重定向到文件/管道时无代码页语义，一律 UTF-8
-    /// （与 exec 子进程链路的约定一致）。
-    /// </summary>
-    private static TextWriter NewWriter(Stream s, bool isConsole, bool stderr) =>
-        WindowsConsoleWriter.TryCreate(s, isConsole, stderr, out var consoleWriter)
-            ? consoleWriter
-            : new StreamWriter(s, Utf8NoBom, 1024, leaveOpen: true) { AutoFlush = true };
+    public TextWriter OutText => _outText ??= OutputChannel.Create(Out, stderr: false, OutIsStd, Home);
+    public TextWriter ErrText => _errText ??= OutputChannel.Create(Err, stderr: true, ErrIsStd, Home);
 }
 
 public static class CliRunner
@@ -44,9 +32,10 @@ public static class CliRunner
             Err = stderr ?? Console.OpenStandardError(),
             In = stdin ?? Console.In,
             Interactive = interactive,
-            // 真实 CLI 运行（未显式传流）且句柄是控制台时，才按控制台代码页输出；测试传入内存流恒为 UTF-8
-            OutIsConsole = stdout is null && !Console.IsOutputRedirected,
-            ErrIsConsole = stderr is null && !Console.IsErrorRedirected,
+            // 真实 CLI 运行（未显式传流）时标准句柄标记为 true，Windows 下据此选通道；
+            // 测试传入内存流恒 false → UTF-8。通道判定以句柄真实类型为准（见 OutputChannel）
+            OutIsStd = stdout is null,
+            ErrIsStd = stderr is null,
         };
 
         // 全局选项 --home <dir>：只认命令名之前的位置（第 0/1 个 token），
@@ -125,11 +114,13 @@ public static class CliRunner
             pwhide exec [选项] -f <脚本>              脚本 stdin 模式（不落盘）
             pwhide rotate                             更换身份密钥对
             pwhide harden / doctor / version
+            pwhide doctor --output-encoding <auto|utf8|utf16|gbk|json>
+                                                    全局手工指定输出编码（乱码兜底）
 
             exec 选项：--shell auto|bash|sh|pwsh|cmd|none  --env 条目:环境变量(可重复)
                        --timeout 秒(默认120)  --allow-echo(放行回显探测拦截)  --home <目录>
                        --ph #|@（占位符定界符，默认 {{name}}；脚本中 # 与注释冲突时用 @）
-            环境变量：PWHIDE_HOME / PWHIDE_PASSPHRASE / PWHIDE_PASSPHRASE_FILE
+            环境变量：PWHIDE_HOME / PWHIDE_PASSPHRASE / PWHIDE_PASSPHRASE_FILE / PWHIDE_OUTPUT_ENCODING
             """);
         return ExitCodes.Usage;
     }
