@@ -75,7 +75,7 @@ public static class Commands
     public static int Set(CliContext ctx, string[] args)
     {
         string? name = null, type = null, username = null, tenant = null, password = null;
-        var fields = new List<(string Name, string? Value)>();
+        var fields = new List<(string Name, string? Value, bool Plain)>();
         var passwordStdin = false;
         var forceWeak = false;
 
@@ -89,7 +89,15 @@ public static class Commands
                 case "-f":
                     var spec = Value(args, ref i, "-f 需要 <字段名=值> 或 <字段名>（隐藏输入）");
                     var eq = spec.IndexOf('=');
-                    fields.Add(eq < 0 ? (spec, null) : (spec[..eq], spec[(eq + 1)..]));
+                    fields.Add(eq < 0 ? (spec, null, false) : (spec[..eq], spec[(eq + 1)..], false));
+                    break;
+                case "-pf" or "--plain-field":
+                    // 明文字段（非敏感配置：IP/协议/端口等）：值进 list --json 元数据，AI 可见，填充无需解锁
+                    var pspec = Value(args, ref i, "-pf 需要 <字段名=值>（明文字段必须显式给值）");
+                    var peq = pspec.IndexOf('=');
+                    if (peq <= 0 || peq == pspec.Length - 1)
+                        throw new UsageException($"-pf 需要 <字段名=值>（收到 {pspec}）");
+                    fields.Add((pspec[..peq], pspec[(peq + 1)..], true));
                     break;
                 case "--password-stdin": passwordStdin = true; break;
                 case "--force-weak": forceWeak = true; break;
@@ -99,19 +107,24 @@ public static class Commands
                     break;
             }
         }
-        if (name is null) throw new UsageException("用法：pwhide set <名> [-t 类型] [-u 账号] [-T 租户] [-f 字段=值]… [--password-stdin] [--force-weak]");
+        if (fields.Select(f => f.Name).GroupBy(n => n).Any(g => g.Count() > 1))
+            throw new UsageException("同一字段名不能重复指定（-f 与 -pf 同名也不行：加密/明文二选一）");
+        if (name is null) throw new UsageException("用法：pwhide set <名> [-t 类型] [-u 账号] [-T 租户] [-f 字段=值]… [-pf 明文字段=值]… [--password-stdin] [--force-weak]");
 
         if (passwordStdin)
         {
             password = ctx.In.ReadLine() ?? "";
-            if (password.Length == 0) throw new UsageException("--password-stdin：未从 stdin 读到密码");
+            // 清除首尾空白：粘贴/管道极易带入换行与空格，注入后与预期不符且脱敏按原值匹配
+            password = password.Trim();
+            if (password.Length == 0) throw new UsageException("--password-stdin：未从 stdin 读到密码（或内容全是空白）");
         }
         else if (ctx.Interactive)
         {
             ctx.ErrText.Write($"密码（{name}）: ");
             password = HiddenInput.ReadLineHidden(ctx.In, ctx.Interactive);
+            password = password.Trim();
             ctx.ErrText.Write("再次确认: ");
-            if (HiddenInput.ReadLineHidden(ctx.In, ctx.Interactive) != password)
+            if (HiddenInput.ReadLineHidden(ctx.In, ctx.Interactive).Trim() != password)
                 throw new VaultException("两次输入不一致");
         }
         else throw new UsageException("非交互环境请使用 --password-stdin 从 stdin 提供密码（禁止命令行明文传密码）");
@@ -129,17 +142,41 @@ public static class Commands
         vault.Unlock(GetPassphrase(ctx, confirm: false));
         var entry = vault.GetOrAdd(name, type, username, tenant);
         vault.SetPassword(entry, password);
-        foreach (var (fname, fvalue) in fields)
+        foreach (var (fname, fvalue, plainFlag) in fields)
         {
-            string value = fvalue ?? (ctx.Interactive
-                ? HiddenInputWithPrompt(ctx, $"字段 {fname} 的值: ")
-                : throw new UsageException($"非交互环境请用 -f {fname}=<值> 提供字段值"));
+            string value;
+            if (fvalue is not null) value = fvalue;
+            else if (ctx.Interactive)
+            {
+                ctx.ErrText.Write($"字段 {fname} 的值: ");
+                value = HiddenInput.ReadLineHidden(ctx.In, ctx.Interactive);
+            }
+            else throw new UsageException($"非交互环境请用 -f {fname}=<值> 提供字段值");
+
+            // 交互式逐字段询问是否加密（-pf 已显式选明文，不再问）。
+            // 回车取默认：形似敏感（key/token/secret…）默认加密，其余（IP/协议/端口等）默认明文
+            var encrypt = plainFlag ? false : true;
+            if (!plainFlag && ctx.Interactive)
+            {
+                var sensitive = LooksSensitive(fname);
+                ctx.ErrText.Write($"字段 {fname} 是否敏感、需要加密存储？[{(sensitive ? "Y/n" : "y/N")}] ");
+                var ans = (ctx.In.ReadLine() ?? "").Trim().ToLowerInvariant();
+                encrypt = ans.Length == 0 ? sensitive : ans is "y" or "yes";
+            }
+
+            value = value.Trim();
             if (value.Length == 0)
-                throw new UsageException($"字段 {fname} 的值不能为空");
+                throw new UsageException($"字段 {fname} 的值不能为空（首尾空白已清除后仍为空）");
+
+            if (!encrypt)
+            {
+                vault.SetPlainField(entry, fname, value);
+                continue;
+            }
             // 敏感字段名经 argv 传值会进 shell history/ps：提醒改用交互隐藏输入
             if (fvalue is not null && LooksSensitive(fname))
                 ctx.ErrText.WriteLine($"pwhide: 警告：字段 {fname} 形似敏感字段，命令行传值会进入 shell history——建议改用交互隐藏输入（pwhide set … -f {fname}）");
-            // 字段值（如 host=127.0.0.1 这类常见值）不阻断，仅警告：与密码不同，字段常为非敏感配置
+            // 加密字段值（如 host=127.0.0.1 这类常见值）不阻断，仅警告：密文注入可能与正常输出碰撞（明文字段无此问题）
             if (WeakSecret.Check(value) is { } fieldReason)
                 ctx.ErrText.WriteLine($"pwhide: 警告：字段 {fname} 的值{fieldReason}；作为密文注入时可能与正常输出碰撞，请确认");
             vault.SetField(entry, fname, value);
@@ -193,6 +230,8 @@ public static class Commands
             ctx.OutText.WriteLine($"名称: {meta.Name}");
             ctx.OutText.WriteLine($"类型: {meta.Type ?? "-"}    账号: {meta.Username ?? "-"}    租户: {meta.Tenant ?? "-"}");
             ctx.OutText.WriteLine($"密码: {(meta.HasPassword ? "已设置（只能经 {{" + meta.Name + "}} 注入）" : "未设置")}");
+            if (meta.PlainFields.Count > 0)
+                ctx.OutText.WriteLine("明文字段（非敏感，元数据可见）: " + string.Join("  ", meta.PlainFields.Select(kv => $"{kv.Key}={kv.Value}")));
             ctx.OutText.WriteLine("可用占位符:");
             foreach (var p in meta.Placeholders) ctx.OutText.WriteLine($"  {p}");
         }
@@ -215,6 +254,8 @@ public static class Commands
         if (e.Username is not null) meta.Placeholders.Add(Vault.Token(e.Name, "user"));
         if (e.Tenant is not null) meta.Placeholders.Add(Vault.Token(e.Name, "tenant"));
         foreach (var f in e.Fields) meta.Placeholders.Add(Vault.Token(e.Name, f.Name));
+        foreach (var n in e.PlainFields.Keys) meta.Placeholders.Add(Vault.Token(e.Name, n));
+        meta.PlainFields = e.PlainFields;
         return meta;
     }
 

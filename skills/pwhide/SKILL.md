@@ -38,7 +38,7 @@ pwhide list --json       # 全部条目
 pwhide inspect <name>    # 单条目 + 可用占位符清单
 ```
 
-可见：条目名、账号类型（type）、账号（username）、租户（tenant）、自定义字段名、`hasPassword`。不可见：密码与字段值。
+可见：条目名、账号类型（type）、账号（username）、租户（tenant）、自定义字段名、明文字段值（plainFields，-pf 录入的 host/proto 等非敏感信息）、`hasPassword`。不可见：密码与加密字段值。
 
 ## 执行命令
 

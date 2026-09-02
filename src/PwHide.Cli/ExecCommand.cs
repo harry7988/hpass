@@ -111,7 +111,8 @@ public static partial class ExecCommand
                 throw new PlaceholderException(token, entry, $"{entry} 未设置账号（user）");
             if (field is "tenant" && e.Tenant is null)
                 throw new PlaceholderException(token, entry, $"{entry} 未设置租户（tenant）");
-            if (field is not null and not "user" and not "tenant" && e.Fields.All(f => f.Name != field))
+            if (field is not null and not "user" and not "tenant"
+                && e.Fields.All(f => f.Name != field) && !e.PlainFields.ContainsKey(field))
                 throw new PlaceholderException(token, entry, $"条目 {entry} 不存在字段 {field}");
         }
         foreach (var (envEntry, _) in envSpecs)
@@ -125,17 +126,17 @@ public static partial class ExecCommand
 
         // 回显探测防护（全文共现语义）：回显原语 + 密文引用共现即拒绝——组合即可做逐候选字典探测。
         // 密文引用 = 文本中的密文占位符，或 --env 注入（同样激活脱敏规则：echo 候选被替换 ⟺ 候选==密码）
-        if (!allowEcho && (refs.Any(NeedsSecret) || envSpecs.Count > 0))
+        if (!allowEcho && (refs.Any(r => NeedsSecret(vault, r)) || envSpecs.Count > 0))
         {
             var rawText = string.Join('\n', texts);
             if (EchoProbe.HasEchoPrimitive(rawText))
             {
-                var secretToken = refs.Where(r => NeedsSecret(r)).Select(r => syntax.Render(r.Entry, r.Field)).FirstOrDefault() ?? syntax.Render("条目");
+                var secretToken = refs.Where(r => NeedsSecret(vault, r)).Select(r => syntax.Render(r.Entry, r.Field)).FirstOrDefault() ?? syntax.Render("条目");
                 throw new UsageException(EchoProbe.DenyMessage(secretToken));
             }
         }
 
-        var needsSecret = refs.Any(NeedsSecret) || envSpecs.Count > 0;
+        var needsSecret = refs.Any(r => NeedsSecret(vault, r)) || envSpecs.Count > 0;
 
         if (needsSecret)
             vault.Unlock(Commands.GetPassphrase(ctx, confirm: false));
@@ -152,10 +153,10 @@ public static partial class ExecCommand
                 null => vault.DecryptPassword(e),
                 "user" => e.Username!,
                 "tenant" => e.Tenant!,
-                _ => vault.DecryptField(e, field),
+                _ => e.PlainFields.TryGetValue(field, out var plain) ? plain : vault.DecryptField(e, field),
             };
             tokenValues[token] = value;
-            if (NeedsSecret(new PlaceholderRef(entry, field))) redaction[value] = token;
+            if (NeedsSecret(vault, new PlaceholderRef(entry, field))) redaction[value] = token;
         }
 
         // 2) env 注入：条目密码 → 子进程环境变量（argv 干净；注意 /proc/<pid>/environ 对祖先进程可读，见 threat-model）
@@ -187,7 +188,7 @@ public static partial class ExecCommand
         // shell 元字符警告（非阻断）：密文含引号/美元/反引号/反斜杠时，经嵌套 shell 或脚本模式会被
         // 二级解析成变体/碎片，字节精确脱敏对变体失配 → 建议改用 --env 注入（值不经 shell 解析，免疫）
         var viaShell = shell is not "none" || scriptPath is not null;
-        var hasInlineSecret = refs.Any(r => NeedsSecret(r) && !envSpecs.Any(e => e.Entry == r.Entry));
+        var hasInlineSecret = refs.Any(r => NeedsSecret(vault, r) && !envSpecs.Any(e => e.Entry == r.Entry));
         if (viaShell && hasInlineSecret)
         {
             foreach (var (token, value) in tokenValues)
@@ -197,7 +198,7 @@ public static partial class ExecCommand
                 var entryName = dot < 0 ? body : body[..dot];
                 var fieldName = dot < 0 ? null : body[(dot + 1)..];
                 if (envSpecs.Any(e => e.Entry == entryName)) continue;   // env 覆盖的引用不经 shell 解析
-                if (!NeedsSecret(new PlaceholderRef(entryName, fieldName))) continue;
+                if (!NeedsSecret(vault, new PlaceholderRef(entryName, fieldName))) continue;
                 if (value.IndexOfAny(['"', '\'', '$', '`', '\\', '&', '|', '<', '>', '^']) >= 0)
                 {
                     ctx.ErrText.WriteLine($"pwhide: 警告：{token} 的值包含 shell 元字符（引号/美元/反引号/反斜杠），经 shell 解析可能产生变体绕过输出脱敏（cmd 还含 & | < > ^）——建议改用 --env 注入（值不经 shell 解析）");
@@ -218,7 +219,12 @@ public static partial class ExecCommand
         return result.ExitCode;
     }
 
-    /// <summary>密码与自定义字段值为密文；user/tenant 为明文，不参与脱敏。</summary>
-    private static bool NeedsSecret(PlaceholderRef r) =>
-        r.Field is null || r.Field is not ("user" or "tenant");
+    /// <summary>密码与加密字段值为密文；user/tenant 与明文字段（PlainFields）为明文，不参与脱敏、不触发解锁。</summary>
+    private static bool NeedsSecret(Vault vault, PlaceholderRef r)
+    {
+        if (r.Field is null) return true;
+        if (r.Field is "user" or "tenant") return false;
+        var e = vault.Find(r.Entry);
+        return e is null || e.PlainFields.ContainsKey(r.Field) ? false : true;
+    }
 }

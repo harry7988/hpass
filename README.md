@@ -2,7 +2,7 @@
 
 > 面向 AI 编程工具的本地密码代填 CLI —— AI 只看到占位符和执行结果，密码永远不进入对话上下文。
 
-**状态：v0.4.0 已实现** —— 237 个测试全部通过（140 单元 + 97 集成），CI 三平台（macOS / Ubuntu / Windows）构建测试 + Native AOT 冒烟（含真实 sudo 的管理员级加固流程）全绿；威胁模型见 [docs/threat-model.md](docs/threat-model.md)，里程碑状态见 [PLAN.md](PLAN.md)。
+**状态：v0.5.0 已实现** —— 244 个测试全部通过（140 单元 + 104 集成），CI 三平台（macOS / Ubuntu / Windows）构建测试 + Native AOT 冒烟（含真实 sudo 的管理员级加固流程）全绿；威胁模型见 [docs/threat-model.md](docs/threat-model.md)，里程碑状态见 [PLAN.md](PLAN.md)。
 
 ## 为什么需要 pwhide
 
@@ -19,6 +19,7 @@ AI 收到：mysql: [输出] ...（若输出中出现密码，已被替换为 {{d
 ## 核心特性
 
 - **零上下文泄露**：没有任何查看密码的命令；子进程输出流式脱敏后才返回。
+- **明文字段**：`set` 交互式逐字段询问是否加密（敏感名默认加密，IP/协议等默认明文；脚本/AI 用 `-pf 名=值` 显式明文）。明文字段值进 `list --json` 元数据，AI 免解锁组装命令；`{{名.字段}}` 照常填充且不触发脱敏/解锁。录入的密码与字段值一律清除首尾空白。
 - **系统钥匙串零交互**：`pwhide keychain set` 把主口令存入 macOS Keychain / Windows 凭据管理器 / Linux Secret Service（先验证口令能解锁 vault 才入库），之后 `exec` 等全部命令自动取用，AI 调用不再需要口令；`keychain clear` 撤销，`PWHIDE_NO_KEYCHAIN=1` 临时跳过。
 - **可切换占位符定界符**：默认 `{{name}}`；`exec --ph '#'` 切换为 `#name#`（`--ph '@'` → `@name@`），规避与 Helm/Jinja/Go template 等模板语法的 `{{` 转义冲突。切换后解析、脱敏、回显探测语义完全一致。
 - **弱密码与探测防护**：录入时拦截"密码=常见语句"（会误替换日志、且替换位置会暴露密码内容，`--force-weak` 可覆盖）；`exec` 拒绝回显探测命令（echo/printf 与占位符在同一次调用中共现，`--allow-echo` 放行）；单次输出替换超过 32 次会告警提示换强密码。
@@ -113,7 +114,7 @@ pwhide exec -f deploy.sh          # 推荐：唯一同时避开 argv 与 environ
 ```
 当需要执行包含密码的命令时：
 1. 永远不要向用户索要真实密码，用 {{条目名}} 占位；
-2. 不确定有哪些凭据可用时，先 `pwhide list --json` 查询（可见：账号类型、账号、租户、自定义字段名；不可见：密码与字段值）；
+2. 不确定有哪些凭据可用时，先 `pwhide list --json` 查询（可见：账号类型、账号、租户、自定义字段名、明文字段值（-pf 录入的非敏感信息如 host/proto）；不可见：密码与加密字段值）；
 3. 通过 `pwhide exec -- <命令>` 执行，pwhide 会自动填充并返回结果；
 4. 报"未知条目"（退出码 4）时，若无该条目则请用户本人运行 `pwhide set <名字>` 录入；
 5. 输出中出现的 {{条目名}} 即为被脱敏的密码，属正常现象；
@@ -162,7 +163,7 @@ git clone git@github.com:harry7988/pwhide.git && cd pwhide
 
 ```bash
 dotnet build
-dotnet test          # 237 个测试：单元（加密/vault/占位符/脱敏/执行引擎/加固/弱密码/探测）+ 集成（CLI 全链路）
+dotnet test          # 244 个测试：单元（加密/vault/占位符/脱敏/执行引擎/加固/弱密码/探测）+ 集成（CLI 全链路）
 dotnet publish src/PwHide.Cli -c Release -r osx-arm64 /p:PublishAot=true -o publish
 ```
 

@@ -106,7 +106,7 @@ public static class CliRunner
             pwhide — 本地密码代填执行器（密码只进进程，不出终端）
 
             pwhide init [--no-harden]                 初始化 vault（设置主口令）
-            pwhide set <名> [-t 类型] [-u 账号] [-T 租户] [-f 字段=值]… [--password-stdin]
+            pwhide set <名> [-t 类型] [-u 账号] [-T 租户] [-f 字段=值]… [-pf 明文字段=值]… [--password-stdin]
                                                     录入/更新条目（密码隐藏输入）
             pwhide list [--json]                      列出条目元数据（不含密文值）
             pwhide inspect <名> [--json]              单条目元数据与可用占位符

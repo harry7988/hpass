@@ -35,6 +35,8 @@ public sealed class VaultEntry
     public string? Username { get; set; }
     public string? Tenant { get; set; }
     public List<EncryptedField> Fields { get; set; } = [];
+    /// <summary>明文字段（set 时用户自选非敏感信息：IP、协议、端口等）。值在 list --json 元数据中可见，AI 查询/填充均无需解锁。</summary>
+    public Dictionary<string, string> PlainFields { get; set; } = [];
     public string CreatedAt { get; set; } = "";
     public string UpdatedAt { get; set; } = "";
     /// <summary>主密码密文（AES-256-GCM，AAD 绑定条目名）。</summary>
@@ -65,7 +67,7 @@ public sealed class PwHideConfig
     public int TimeoutSeconds { get; set; } = 120;
 }
 
-/// <summary>list --json / inspect --json 的条目元数据（不含任何密文值）。</summary>
+/// <summary>list --json / inspect --json 的条目元数据（不含任何密文值；明文字段值按设计可见）。</summary>
 public sealed class EntryMeta
 {
     public string Name { get; set; } = "";
@@ -74,6 +76,8 @@ public sealed class EntryMeta
     public string? Tenant { get; set; }
     public bool HasPassword { get; set; }
     public List<string> Fields { get; set; } = [];
+    /// <summary>明文字段名→值（用户录入时自选非敏感信息；AI 可直接读取组装命令）。</summary>
+    public Dictionary<string, string> PlainFields { get; set; } = [];
     public List<string> Placeholders { get; set; } = [];
     public string UpdatedAt { get; set; } = "";
 }

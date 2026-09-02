@@ -347,7 +347,7 @@ pwhide exec --env db:MYSQL_PWD -- mysql -u {{db.user}} -e "SELECT 1"</div>
     <h2>五分钟教程</h2>
     <p class="lead">从录入到 AI 日常使用的完整路径。</p>
     <div class="steps">
-      <div class="step"><div class="n">01</div><div><h3>录入凭据</h3><p><code>set</code> 交互式隐藏输入；<code>-f 字段=值</code> 添加自定义字段（api_key 等敏感字段用 <code>-f 字段名</code> 交互输入，避免进 shell history）；非交互场景用 <code>--password-stdin</code> 管道传入。弱密码会被直接拒绝。</p></div></div>
+      <div class="step"><div class="n">01</div><div><h3>录入凭据</h3><p><code>set</code> 交互式隐藏输入；<code>-f 字段=值</code> 添加自定义字段（api_key 等敏感字段用 <code>-f 字段名</code> 交互输入，避免进 shell history）；非交互场景用 <code>--password-stdin</code> 管道传入（录入的密码与字段值都会清除首尾空白）。每个字段会交互式询问是否加密：IP / 协议这类非敏感信息可选明文（值会出现在 <code>list --json</code> 里，AI 免解锁直接用），脚本里用 <code>-pf 名=值</code> 显式指定。弱密码会被直接拒绝。</p></div></div>
       <div class="step"><div class="n">02</div><div><h3>了解占位符语法</h3><p><code>{{db}}</code> 密码、<code>{{db.user}}</code> 账号、<code>{{db.tenant}}</code> 租户、<code>{{db.字段名}}</code> 自定义字段值。条目名可用 <code>list</code> 查到，密码没有查询接口。与 Helm / Jinja 等模板的 <code>{{ }}</code> 冲突时，加 <code>--ph '#'</code> 改用 <code>#db#</code>（或 <code>--ph '@'</code> 用 <code>@db@</code>），解析与脱敏语义完全一致。</p></div></div>
       <div class="step"><div class="n">03</div><div><h3>三种执行方式按安全性递增</h3><p>args 内联最直观但 <code>ps</code> 短暂可见；<code>--env 条目:环境变量</code> 注入环境（注意 Linux 祖先进程可读 /proc）；<b>推荐脚本 stdin 模式</b>：脚本里写占位符，<code>pwhide exec -f deploy.sh</code>，替换只在内存发生，不落盘不进 argv。</p></div></div>
       <div class="step"><div class="n">04</div><div><h3>看懂退出码</h3><p>0 成功（透传子进程码）；2 用法错误或回显探测拦截；3 口令或 vault 错误、需提权；4 未知占位符（命令不会被执行）；124 超时已杀进程树。</p></div></div>

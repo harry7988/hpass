@@ -217,6 +217,7 @@ public sealed class Vault : IDisposable
         if (fieldName is "user" or "tenant")
             throw new UsageException($"字段名 {fieldName} 为保留字，不能用作自定义字段");
         EnsureUnlocked();
+        entry.PlainFields.Remove(fieldName);   // 同名互斥：改为加密存储时移出明文区
         var bytes = Encoding.UTF8.GetBytes(value);
         var box = Crypto.Seal(_dek!, bytes, Aad(entry.Name, FieldPath(fieldName)));
         bytes.AsSpan().Clear();
@@ -224,6 +225,17 @@ public sealed class Vault : IDisposable
         if (f is null) { f = new EncryptedField { Name = fieldName }; entry.Fields.Add(f); }
         f.Nonce = box.Nonce;
         f.Ct = box.Ct;
+    }
+
+    /// <summary>明文字段：非敏感配置（IP/协议/端口等）。不经加密，list --json 元数据可见，exec 填充无需解锁。</summary>
+    public void SetPlainField(VaultEntry entry, string fieldName, string value)
+    {
+        ValidateName(fieldName, "字段名");
+        if (fieldName is "user" or "tenant")
+            throw new UsageException($"字段名 {fieldName} 为保留字，不能用作自定义字段");
+        entry.Fields.RemoveAll(f => f.Name == fieldName);   // 同名互斥：改为明文时移出加密区
+        entry.PlainFields[fieldName] = value;
+        entry.UpdatedAt = DateTimeOffset.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ");
     }
 
     public string DecryptField(VaultEntry entry, string fieldName)
