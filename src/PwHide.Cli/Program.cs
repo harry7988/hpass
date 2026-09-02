@@ -69,6 +69,7 @@ public static class CliRunner
                 "harden" => Commands.Harden(ctx, cmdArgs),
                 "_install-staged" => Commands.InstallStaged(ctx, cmdArgs),
                 "doctor" => Commands.Doctor(ctx, cmdArgs),
+                "keychain" => Commands.KeychainCmd(ctx, cmdArgs),
                 "version" or "--version" or "-v" => VersionCmd(ctx),
                 "help" or "--help" or "-h" => Usage(ctx, ""),
                 _ => Usage(ctx, $"未知命令：{cmd}"),
@@ -113,6 +114,7 @@ public static class CliRunner
             pwhide exec [选项] -- <命令…>             填充+执行+脱敏
             pwhide exec [选项] -f <脚本>              脚本 stdin 模式（不落盘）
             pwhide rotate                             更换身份密钥对
+            pwhide keychain set|clear|status          主口令存入系统钥匙串（配置后 exec 零交互）
             pwhide harden / doctor / version
             pwhide doctor --output-encoding <auto|utf8|utf16|gbk|json>
                                                     全局手工指定输出编码（乱码兜底）
@@ -120,7 +122,7 @@ public static class CliRunner
             exec 选项：--shell auto|bash|sh|pwsh|cmd|none  --env 条目:环境变量(可重复)
                        --timeout 秒(默认120)  --allow-echo(放行回显探测拦截)  --home <目录>
                        --ph #|@（占位符定界符，默认 {{name}}；脚本中 # 与注释冲突时用 @）
-            环境变量：PWHIDE_HOME / PWHIDE_PASSPHRASE / PWHIDE_PASSPHRASE_FILE / PWHIDE_OUTPUT_ENCODING
+            环境变量：PWHIDE_HOME / PWHIDE_PASSPHRASE / PWHIDE_PASSPHRASE_FILE / PWHIDE_OUTPUT_ENCODING / PWHIDE_NO_KEYCHAIN
             """);
         return ExitCodes.Usage;
     }

@@ -81,7 +81,7 @@ pwhide set <条目名> -t <类型:database|ssh|api|cloud|自定义> -u <账号> 
 | 现象 | 含义 | 你的动作 |
 |---|---|---|
 | 退出码 4 | 未知条目/字段 | `pwhide list` 核对；不存在则请用户本人 `pwhide set` |
-| 退出码 3 | 主口令未解锁/错误 | 提示用户配置 `PWHIDE_PASSPHRASE_FILE` 或交互输入；不要猜测 |
+| 退出码 3 | 主口令未解锁/错误 | 提示用户运行 `pwhide keychain set`（一次配置，之后零交互）或配置 `PWHIDE_PASSPHRASE_FILE`；不要猜测、不要向用户索要口令 |
 | 退出码 124 | 子进程超时被杀 | 检查命令是否挂起，必要时加 `--timeout` |
 | 输出含 `{{…}}` | 正常脱敏标记 | 直接转述结果 |
 | `pwhide exec` 触发 sudo/UAC | 异常（读路径永不提权） | 运行 `pwhide doctor` 并反馈用户 |

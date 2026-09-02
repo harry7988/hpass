@@ -22,8 +22,16 @@ public static class Commands
             return CheckLength(File.ReadAllText(file).TrimEnd('\r', '\n'));
         }
 
+        // 系统钥匙串：配置一次（pwhide keychain set）后 exec/set 全自动，非交互（AI 调用）也可用。
+        // 口令只在本进程内解密使用，永不回显/记录；PWHIDE_NO_KEYCHAIN=1 可跳过
+        if (Environment.GetEnvironmentVariable("PWHIDE_NO_KEYCHAIN") != "1"
+            && Keychain.IsSupported && Keychain.TryGet(ctx.Home, out var fromKeychain))
+        {
+            return CheckLength(fromKeychain);
+        }
+
         if (!ctx.Interactive)
-            throw new VaultException("非交互环境需要解锁：请设置 PWHIDE_PASSPHRASE 或 PWHIDE_PASSPHRASE_FILE");
+            throw new VaultException("非交互环境需要解锁：请设置 PWHIDE_PASSPHRASE / PWHIDE_PASSPHRASE_FILE，或先运行 pwhide keychain set 存入系统钥匙串");
 
         ctx.ErrText.Write("主口令: ");
         var first = HiddenInput.ReadLineHidden(ctx.In, ctx.Interactive);
@@ -495,5 +503,64 @@ public static class Commands
         if (i + 1 >= args.Length) throw new UsageException(err);
         i++;
         return args[i];
+    }
+
+    /// <summary>
+    /// pwhide keychain set|clear|status：主口令存入系统钥匙串，之后所有命令（exec/set 等）自动取用、零交互。
+    /// 存的是主口令（OS 负责静态加密与解锁策略）；口令只进本进程内存，永不回显、永不进入 AI 上下文。
+    /// </summary>
+    public static int KeychainCmd(CliContext ctx, string[] args)
+    {
+        var sub = args.Length == 0 ? "status" : args[0];
+        switch (sub)
+        {
+            case "set":
+            {
+                if (!Keychain.IsSupported)
+                    throw new VaultException($"当前平台钥匙串不可用：{Keychain.Describe()}。替代方案：PWHIDE_PASSPHRASE_FILE（chmod 600）");
+                if (!Vault.Exists(ctx.Home))
+                    throw new VaultException($"vault 不存在（{ctx.Home}）。请先 pwhide init，再 keychain set");
+                var env = Environment.GetEnvironmentVariable("PWHIDE_PASSPHRASE");
+                string pass;
+                if (!string.IsNullOrEmpty(env))
+                {
+                    pass = CheckLength(env);   // 非交互（脚本/AI）配置路径：口令经环境变量提供一次
+                }
+                else
+                {
+                    if (!ctx.Interactive)
+                        throw new VaultException("非交互环境请用 PWHIDE_PASSPHRASE=<主口令> pwhide keychain set 完成一次配置");
+                    ctx.ErrText.Write("主口令: ");
+                    pass = CheckLength(HiddenInput.ReadLineHidden(ctx.In, ctx.Interactive));
+                }
+                // 先验证口令确实能解锁当前 vault，防止把错误口令入库导致后续全部命令失败
+                using (var vault = Vault.Open(ctx.Home))
+                    vault.Unlock(pass);
+                Keychain.Store(ctx.Home, pass);
+                ctx.OutText.WriteLine($"已存入 {Keychain.Describe()}（槽位绑定 {ctx.Home}）。之后 exec/set 等命令将自动取用，无需再输口令");
+                ctx.OutText.WriteLine($"撤销：pwhide keychain clear；临时跳过：PWHIDE_NO_KEYCHAIN=1");
+                return ExitCodes.Ok;
+            }
+            case "clear":
+            {
+                var removed = Keychain.Clear(ctx.Home);
+                ctx.OutText.WriteLine(removed ? "已从钥匙串删除主口令" : "钥匙串中没有已存储的主口令（无需清理）");
+                return ExitCodes.Ok;
+            }
+            case "status":
+            {
+                ctx.OutText.WriteLine($"平台支持 : {Keychain.Describe()}");
+                var enabled = Environment.GetEnvironmentVariable("PWHIDE_NO_KEYCHAIN") == "1";
+                if (enabled) { ctx.OutText.WriteLine("当前状态 : 已通过 PWHIDE_NO_KEYCHAIN=1 禁用钥匙串来源"); return ExitCodes.Ok; }
+                if (!Keychain.IsSupported) { ctx.OutText.WriteLine("当前状态 : 不可用（见上）"); return ExitCodes.Ok; }
+                var stored = Keychain.TryGet(ctx.Home, out _);
+                ctx.OutText.WriteLine(stored
+                    ? "当前状态 : 已存储主口令（exec/set 自动取用，零交互）"
+                    : "当前状态 : 未存储。运行 pwhide keychain set 配置（配置后 exec 无需再输口令）");
+                return ExitCodes.Ok;
+            }
+            default:
+                throw new UsageException($"未知的 keychain 子命令：{sub}（可用 set / clear / status）");
+        }
     }
 }
