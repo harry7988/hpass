@@ -2,7 +2,7 @@
 
 > 面向 AI 编程工具的本地密码代填 CLI —— AI 只看到占位符和执行结果，密码永远不进入对话上下文。
 
-**状态：v0.5.0 已实现** —— 244 个测试全部通过（140 单元 + 104 集成），CI 三平台（macOS / Ubuntu / Windows）构建测试 + Native AOT 冒烟（含真实 sudo 的管理员级加固流程）全绿；威胁模型见 [docs/threat-model.md](docs/threat-model.md)，里程碑状态见 [PLAN.md](PLAN.md)。
+**状态：v0.6.0 已实现** —— 252 个测试全部通过（140 单元 + 112 集成），CI 三平台（macOS / Ubuntu / Windows）构建测试 + Native AOT 冒烟（含真实 sudo 的管理员级加固流程）全绿；威胁模型见 [docs/threat-model.md](docs/threat-model.md)，里程碑状态见 [PLAN.md](PLAN.md)。
 
 ## 为什么需要 pwhide
 
@@ -18,7 +18,8 @@ AI 收到：mysql: [输出] ...（若输出中出现密码，已被替换为 {{d
 
 ## 核心特性
 
-- **零上下文泄露**：没有任何查看密码的命令；子进程输出流式脱敏后才返回。
+- **零上下文泄露**：没有任何常规查看密码的命令（唯一例外 `--verify` 人类验证通道：强制真实交互终端 + 手输主口令——忽略 env/文件/钥匙串，非交互/管道环境硬拒绝）；子进程输出流式脱敏后才返回。
+- **人工核验通道**：`pwhide inspect <名> --verify` 解密显示密码与字段供本人核对；`pwhide exec --verify` 执行前展示解密后的注入值与完整命令、人工确认后才放行（执行输出仍自动脱敏）。
 - **明文字段**：`set` 交互式逐字段询问是否加密（敏感名默认加密，IP/协议等默认明文；脚本/AI 用 `-pf 名=值` 显式明文）。明文字段值进 `list --json` 元数据，AI 免解锁组装命令；`{{名.字段}}` 照常填充且不触发脱敏/解锁。录入的密码与字段值一律清除首尾空白。
 - **系统钥匙串零交互**：`pwhide keychain set` 把主口令存入 macOS Keychain / Windows 凭据管理器 / Linux Secret Service（先验证口令能解锁 vault 才入库），之后 `exec` 等全部命令自动取用，AI 调用不再需要口令；`keychain clear` 撤销，`PWHIDE_NO_KEYCHAIN=1` 临时跳过。
 - **可切换占位符定界符**：默认 `{{name}}`；`exec --ph '#'` 切换为 `#name#`（`--ph '@'` → `@name@`），规避与 Helm/Jinja/Go template 等模板语法的 `{{` 转义冲突。切换后解析、脱敏、回显探测语义完全一致。
@@ -163,7 +164,7 @@ git clone git@github.com:harry7988/pwhide.git && cd pwhide
 
 ```bash
 dotnet build
-dotnet test          # 244 个测试：单元（加密/vault/占位符/脱敏/执行引擎/加固/弱密码/探测）+ 集成（CLI 全链路）
+dotnet test          # 252 个测试：单元（加密/vault/占位符/脱敏/执行引擎/加固/弱密码/探测）+ 集成（CLI 全链路）
 dotnet publish src/PwHide.Cli -c Release -r osx-arm64 /p:PublishAot=true -o publish
 ```
 

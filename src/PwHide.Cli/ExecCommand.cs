@@ -21,6 +21,7 @@ public static partial class ExecCommand
         var cmd = new List<string>();
         var restAreCmd = false;   // 首个 -- 或首个位置参数之后，一律视为命令内容（防劫持子命令的 -f/--timeout 等选项）
         var allowEcho = false;
+        var verify = false;
 
         for (var i = 0; i < args.Length; i++)
         {
@@ -35,6 +36,9 @@ public static partial class ExecCommand
                     break;
                 case "--allow-echo":
                     allowEcho = true;
+                    break;
+                case "--verify":
+                    verify = true;
                     break;
                 case "--ph" or "--placeholder":
                     if (++i >= args.Length) throw new UsageException("--ph 需要 # 或 @");
@@ -82,6 +86,10 @@ public static partial class ExecCommand
             throw new UsageException("缺少要执行的命令（pwhide exec [--] <命令…> 或 -f <脚本>）");
         if (scriptPath is not null && cmd.Count > 0)
             throw new UsageException("不能同时指定 -f 脚本与命令参数（多余部分会被忽略，已拒绝）");
+
+        // --verify 的终端硬校验必须最先执行：非交互/重定向环境下一律拒绝，先于回显探测等一切后续检查
+        if (verify && !Commands.IsHumanTerminal(ctx))
+            throw new UsageException("--verify 需要在真实交互终端运行并手动输入主口令（当前为非交互或 stdin/stdout 被重定向——这是防止密文进入 AI 上下文/日志/管道的硬性限制）");
 
         // 占位符语法（白名单校验在 Parse 内）：--ph '#' → #name#；--ph '@' → @name@；默认 {{name}}
         var syntax = TokenSyntax.Parse(phSymbol);
@@ -138,7 +146,9 @@ public static partial class ExecCommand
 
         var needsSecret = refs.Any(r => NeedsSecret(vault, r)) || envSpecs.Count > 0;
 
-        if (needsSecret)
+        if (verify)
+            vault.Unlock(Commands.PassphraseForcedInteractive(ctx));   // --verify：无论是否涉及密文都强制手输解锁（人类在场证明）
+        else if (needsSecret)
             vault.Unlock(Commands.GetPassphrase(ctx, confirm: false));
 
         var tokenValues = new Dictionary<string, string>();
@@ -204,6 +214,28 @@ public static partial class ExecCommand
                     ctx.ErrText.WriteLine($"pwhide: 警告：{token} 的值包含 shell 元字符（引号/美元/反引号/反斜杠），经 shell 解析可能产生变体绕过输出脱敏（cmd 还含 & | < > ^）——建议改用 --env 注入（值不经 shell 解析）");
                     break;
                 }
+            }
+        }
+
+        // --verify 执行前核对：展示解密后的注入值与将执行的命令，人工确认后才放行（输出侧脱敏照常）
+        if (verify)
+        {
+            ctx.OutText.WriteLine("--verify 执行前核对（已解密，仅限本人终端，请勿截图/粘贴给 AI）：");
+            var preview = scriptText is not null
+                ? Placeholder.Replace(scriptText, tokenValues, syntax)
+                : string.Join(' ', cmd.Select(a => Placeholder.Replace(a, tokenValues, syntax)));
+            ctx.OutText.WriteLine("将执行：");
+            foreach (var line in preview.Split('\n')) ctx.OutText.WriteLine("  " + line);
+            if (redaction.Count > 0)
+            {
+                ctx.OutText.WriteLine("涉及密文（将注入子进程；执行输出仍自动脱敏回占位符）：");
+                foreach (var (secret, token) in redaction)
+                    ctx.OutText.WriteLine($"  {token} → {secret}");
+            }
+            if (!Commands.Confirm(ctx, "确认执行？"))
+            {
+                ctx.ErrText.WriteLine("已取消（未执行）");
+                return ExitCodes.Usage;
             }
         }
 

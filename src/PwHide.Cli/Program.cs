@@ -109,7 +109,7 @@ public static class CliRunner
             pwhide set <名> [-t 类型] [-u 账号] [-T 租户] [-f 字段=值]… [-pf 明文字段=值]… [--password-stdin]
                                                     录入/更新条目（密码隐藏输入）
             pwhide list [--json]                      列出条目元数据（不含密文值）
-            pwhide inspect <名> [--json]              单条目元数据与可用占位符
+            pwhide inspect <名> [--json] [--verify]    元数据与占位符；--verify 人工核验（解密显示）
             pwhide delete <名> / rename <旧> <新>     管理条目
             pwhide exec [选项] -- <命令…>             填充+执行+脱敏
             pwhide exec [选项] -f <脚本>              脚本 stdin 模式（不落盘）
@@ -122,6 +122,7 @@ public static class CliRunner
             exec 选项：--shell auto|bash|sh|pwsh|cmd|none  --env 条目:环境变量(可重复)
                        --timeout 秒(默认120)  --allow-echo(放行回显探测拦截)  --home <目录>
                        --ph #|@（占位符定界符，默认 {{name}}；脚本中 # 与注释冲突时用 @）
+                       --verify（执行前人工核对：需交互终端手输主口令，展示解密值并确认）
             环境变量：PWHIDE_HOME / PWHIDE_PASSPHRASE / PWHIDE_PASSPHRASE_FILE / PWHIDE_OUTPUT_ENCODING / PWHIDE_NO_KEYCHAIN
             """);
         return ExitCodes.Usage;

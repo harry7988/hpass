@@ -186,6 +186,32 @@ public static class Commands
         return ExitCodes.Ok;
     }
 
+    // ---------- --verify 人类验证通道 ----------
+    // 测试钩子：模拟"真实交互终端"（CI 无法提供 TTY；用完必须置回 null）
+    internal static Func<bool>? HookIsHumanTerminal;
+
+    /// <summary>--verify 的硬性前提：真实交互终端。stdin 非终端或 stdout 被重定向（管道/文件/日志采集）一律拒绝——密文绝不进入管道与 AI 上下文。</summary>
+    internal static bool IsHumanTerminal(CliContext ctx) =>
+        HookIsHumanTerminal is not null ? HookIsHumanTerminal()
+        : ctx.Interactive && !Console.IsInputRedirected && !Console.IsOutputRedirected;
+
+    /// <summary>--verify 强制手输主口令：忽略 env/文件/钥匙串（在场人类证明）。口令错误由随后 Unlock 以退出码 3 暴露。</summary>
+    internal static string PassphraseForcedInteractive(CliContext ctx)
+    {
+        if (!IsHumanTerminal(ctx))
+            throw new UsageException("--verify 需要在真实交互终端运行并手动输入主口令（当前为非交互或 stdin/stdout 被重定向——这是防止密文进入 AI 上下文/日志/管道的硬性限制）");
+        ctx.ErrText.Write("主口令（--verify 手输）: ");
+        return CheckLength(HiddenInput.ReadLineHidden(ctx.In, ctx.Interactive));
+    }
+
+    /// <summary>终端确认提问（仅 --verify 流程使用），默认否。</summary>
+    internal static bool Confirm(CliContext ctx, string question)
+    {
+        ctx.ErrText.Write(question + " [y/N] ");
+        var ans = (ctx.In.ReadLine() ?? "").Trim().ToLowerInvariant();
+        return ans is "y" or "yes";
+    }
+
     private static bool LooksSensitive(string fieldName)
     {
         foreach (var marker in new[] { "key", "token", "secret", "pin", "password", "passwd", "pwd" })
@@ -218,12 +244,30 @@ public static class Commands
 
     public static int Inspect(CliContext ctx, string[] args)
     {
+        var verify = args.Contains("--verify");
+        var json = args.Contains("--json");
+        if (verify && json)
+            throw new UsageException("--verify 与 --json 不能同时使用（--verify 为人类交互验证通道，输出为终端文本）");
         var name = args.FirstOrDefault(a => !a.StartsWith('-'))
-            ?? throw new UsageException("用法：pwhide inspect <名> [--json]");
+            ?? throw new UsageException("用法：pwhide inspect <名> [--json] [--verify（人工核验：需交互终端手输主口令，解密显示密码与字段）]");
         using var vault = Vault.Open(ctx.Home);
         var entry = vault.Find(name) ?? throw new VaultException($"条目不存在：{name}");
         var meta = ToMeta(entry);
-        if (args.Contains("--json"))
+        if (verify)
+        {
+            // 人类验证通道：强制真实终端 + 手输主口令（忽略 env/文件/钥匙串），解密显示供本人核对。
+            // 唯一允许密文可见的场景；绝无管道/日志路径（IsHumanTerminal 已拒绝重定向）
+            vault.Unlock(PassphraseForcedInteractive(ctx));
+            ctx.OutText.WriteLine($"条目 {meta.Name}（类型 {meta.Type ?? "-"}）  [--verify 解密显示，仅限本人终端，请勿截图/粘贴给 AI]");
+            ctx.OutText.WriteLine($"账号: {meta.Username ?? "-"}    租户: {meta.Tenant ?? "-"}");
+            ctx.OutText.WriteLine($"密码: {(meta.HasPassword ? vault.DecryptPassword(entry) : "（未设置）")}");
+            foreach (var f in entry.Fields)
+                ctx.OutText.WriteLine($"加密字段 {f.Name} = {vault.DecryptField(entry, f.Name)}");
+            foreach (var kv in entry.PlainFields)
+                ctx.OutText.WriteLine($"明文字段 {kv.Key} = {kv.Value}");
+            return ExitCodes.Ok;
+        }
+        if (json)
             ctx.OutText.Write(JsonSerializer.Serialize(meta, PwHideJsonContext.Default.EntryMeta));
         else
         {
