@@ -1,0 +1,18 @@
+Test run for D:\a\pwhide\pwhide\tests\PwHide.Core.Tests\bin\Debug\net10.0\PwHide.Core.Tests.dll (.NETCoreApp,Version=v10.0)
+Test run for D:\a\pwhide\pwhide\tests\PwHide.IntegrationTests\bin\Debug\net10.0\PwHide.IntegrationTests.dll (.NETCoreApp,Version=v10.0)
+A total of 1 test files matched the specified pattern.
+A total of 1 test files matched the specified pattern.
+[xUnit.net 00:00:06.47]     PwHide.IntegrationTests.KeychainTests.Keychain_Satisfies_NonInteractiveExec_NoPrompt [FAIL]
+  Failed PwHide.IntegrationTests.KeychainTests.Keychain_Satisfies_NonInteractiveExec_NoPrompt [1 s]
+  Error Message:
+   Assert.Equal() Failure: Values differ
+Expected: 0
+Actual:   1
+  Stack Trace:
+     at PwHide.IntegrationTests.KeychainTests.Keychain_Satisfies_NonInteractiveExec_NoPrompt() in D:\a\pwhide\pwhide\tests\PwHide.IntegrationTests\KeychainTests.cs:line 38
+   at System.Reflection.MethodBaseInvoker.InterpretedInvoke_Method(Object obj, IntPtr* args)
+   at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)
+
+Failed!  - Failed:     1, Passed:    96, Skipped:     0, Total:    97, Duration: 5 s - PwHide.IntegrationTests.dll (net10.0)
+
+Passed!  - Failed:     0, Passed:   140, Skipped:     0, Total:   140, Duration: 15 s - PwHide.Core.Tests.dll (net10.0)
