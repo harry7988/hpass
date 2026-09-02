@@ -12,6 +12,7 @@ namespace PwHide.IntegrationTests;
 [Collection("sequential")]
 public class KeychainTests : IDisposable
 {
+    private static bool Unix => OperatingSystem.IsLinux() || OperatingSystem.IsMacOS();
     private readonly CliFixture F;
 
     public KeychainTests(CliFixture f)
@@ -32,6 +33,7 @@ public class KeychainTests : IDisposable
     [Fact]
     public void Keychain_Satisfies_NonInteractiveExec_NoPrompt()
     {
+        if (!Unix) return;   // /bin/echo 仅 Unix；口令来源逻辑本身平台无关，由 KeychainSet 系列覆盖
         // 核心场景：AI/脚本环境（无 env、无文件、非交互），钥匙串里有口令 → exec 直接成功
         Keychain.HookTryGet = _ => "init-pass-123";
         var (exit, stdout, _) = F.Run("exec", "--allow-echo", "--", "/bin/echo", "{{db}}");
@@ -42,15 +44,17 @@ public class KeychainTests : IDisposable
     [Fact]
     public void EnvPassphrase_BeatsKeychain()
     {
-        // env 里是正确口令、钩子返回错误口令：仍成功 → 优先级 env > keychain
+        if (!Unix) return;   // /usr/bin/true 仅 Unix
+        // env 里是正确口令、钩子返回错误口令：exec 仍成功 → 优先级 env > keychain（list 查元数据不解锁，不能作证）
         Keychain.HookTryGet = _ => "wrong-from-keychain-9";
-        var (exit, _, _) = F.RunAs("init-pass-123", "list");
+        var (exit, _, _) = F.RunAs("init-pass-123", "exec", "--", "/usr/bin/true", "{{db}}");
         Assert.Equal(0, exit);
     }
 
     [Fact]
     public void WrongKeychainPass_VaultFails()
     {
+        if (!Unix) return;
         Keychain.HookTryGet = _ => "wrong-from-keychain-9";
         var (exit, _, stderr) = F.Run("exec", "--", "/usr/bin/true", "{{db}}");   // 引用密文但无回显原语，才会走到解锁
         Assert.Equal(ExitCodes.Vault, exit);   // 解锁失败（非 4：占位符存在，是口令错）
@@ -60,6 +64,7 @@ public class KeychainTests : IDisposable
     [Fact]
     public void NoKeychainEnv_SkipsKeychain_NonInteractiveStillFails()
     {
+        if (!Unix) return;
         Environment.SetEnvironmentVariable("PWHIDE_NO_KEYCHAIN", "1");
         Keychain.HookTryGet = _ => "init-pass-123";
         var (exit, _, stderr) = F.Run("exec", "--", "/usr/bin/true", "{{db}}");
