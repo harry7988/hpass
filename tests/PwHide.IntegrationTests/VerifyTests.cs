@@ -48,6 +48,33 @@ public class VerifyTests : IDisposable
         Assert.Contains("硬性限制", eerr);
     }
 
+    // ---------- 一等命令 pwhide verify（与 exec 平级） ----------
+
+    [Fact]
+    public void VerifyCommand_NonInteractive_HardRefused()
+    {
+        var (exit, _, stderr) = F.Run("verify", "db");
+        Assert.Equal(ExitCodes.Usage, exit);
+        Assert.Contains("硬性限制", stderr);
+    }
+
+    [Fact]
+    public void VerifyCommand_Terminal_DecryptDisplay_IgnoresEnv()
+    {
+        // env 放错误口令、stdin 手输正确口令：成功 → 一等命令同样强制手输、忽略 env/钥匙串
+        var (exit, stdout, _) = TerminalRun("init-pass-123\n", "totally-wrong-pass", "verify", "db");
+        Assert.Equal(0, exit);
+        Assert.Contains(CliFixture.DbPassword, stdout);
+        Assert.Contains("[verify 解密显示", stdout);
+    }
+
+    [Fact]
+    public void VerifyCommand_MissingEntry_VaultError()
+    {
+        var (exit, _, _) = TerminalRun("init-pass-123\n", null, "verify", "no-such-entry");
+        Assert.Equal(ExitCodes.Vault, exit);
+    }
+
     [Fact]
     public void Verify_RedirectedStdout_Refused()
     {
@@ -70,7 +97,7 @@ public class VerifyTests : IDisposable
         Assert.Equal(0, exit);
         Assert.Contains(CliFixture.DbPassword, stdout);
         Assert.Contains("root", stdout);            // 账号一并显示
-        Assert.Contains("[--verify 解密显示", stdout);
+        Assert.Contains("[verify 解密显示", stdout);
     }
 
     [Fact]

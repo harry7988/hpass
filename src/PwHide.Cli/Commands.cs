@@ -254,19 +254,7 @@ public static class Commands
         var entry = vault.Find(name) ?? throw new VaultException($"条目不存在：{name}");
         var meta = ToMeta(entry);
         if (verify)
-        {
-            // 人类验证通道：强制真实终端 + 手输主口令（忽略 env/文件/钥匙串），解密显示供本人核对。
-            // 唯一允许密文可见的场景；绝无管道/日志路径（IsHumanTerminal 已拒绝重定向）
-            vault.Unlock(PassphraseForcedInteractive(ctx));
-            ctx.OutText.WriteLine($"条目 {meta.Name}（类型 {meta.Type ?? "-"}）  [--verify 解密显示，仅限本人终端，请勿截图/粘贴给 AI]");
-            ctx.OutText.WriteLine($"账号: {meta.Username ?? "-"}    租户: {meta.Tenant ?? "-"}");
-            ctx.OutText.WriteLine($"密码: {(meta.HasPassword ? vault.DecryptPassword(entry) : "（未设置）")}");
-            foreach (var f in entry.Fields)
-                ctx.OutText.WriteLine($"加密字段 {f.Name} = {vault.DecryptField(entry, f.Name)}");
-            foreach (var kv in entry.PlainFields)
-                ctx.OutText.WriteLine($"明文字段 {kv.Key} = {kv.Value}");
-            return ExitCodes.Ok;
-        }
+            return VerifyDisplay(ctx, vault, entry);
         if (json)
             ctx.OutText.Write(JsonSerializer.Serialize(meta, PwHideJsonContext.Default.EntryMeta));
         else
@@ -588,6 +576,38 @@ public static class Commands
         if (i + 1 >= args.Length) throw new UsageException(err);
         i++;
         return args[i];
+    }
+
+    /// <summary>人类核验通道共享显示：强制真实终端 + 手输主口令（忽略 env/文件/钥匙串），解密显示供本人核对。</summary>
+    private static int VerifyDisplay(CliContext ctx, Vault vault, VaultEntry entry)
+    {
+        // 唯一允许密文可见的场景；绝无管道/日志路径（IsHumanTerminal 已拒绝重定向）
+        vault.Unlock(PassphraseForcedInteractive(ctx));
+        var meta = ToMeta(entry);
+        ctx.OutText.WriteLine($"条目 {meta.Name}（类型 {meta.Type ?? "-"}）  [verify 解密显示，仅限本人终端，请勿截图/粘贴给 AI]");
+        ctx.OutText.WriteLine($"账号: {meta.Username ?? "-"}    租户: {meta.Tenant ?? "-"}");
+        ctx.OutText.WriteLine($"密码: {(meta.HasPassword ? vault.DecryptPassword(entry) : "（未设置）")}");
+        foreach (var f in entry.Fields)
+            ctx.OutText.WriteLine($"加密字段 {f.Name} = {vault.DecryptField(entry, f.Name)}");
+        foreach (var kv in entry.PlainFields)
+            ctx.OutText.WriteLine($"明文字段 {kv.Key} = {kv.Value}");
+        return ExitCodes.Ok;
+    }
+
+    /// <summary>
+    /// pwhide verify &lt;名&gt;（与 exec 平级的人工核验命令）：强制真实交互终端 + 手输主口令，解密显示密码与字段。
+    /// 与 inspect &lt;名&gt; --verify 等价；非交互/重定向环境硬拒绝（密文绝不进管道/AI 上下文）。
+    /// </summary>
+    public static int Verify(CliContext ctx, string[] args)
+    {
+        var name = args.FirstOrDefault(a => !a.StartsWith('-'))
+            ?? throw new UsageException("用法：pwhide verify <名>（人工核验：需交互终端手输主口令，解密显示密码与字段）");
+        // 硬校验先于一切（与 exec --verify 同一原则：找不到条目等信息不构成绕过终端检查的理由）
+        if (!IsHumanTerminal(ctx))
+            throw new UsageException("verify 需要在真实交互终端运行并手动输入主口令（当前为非交互或 stdin/stdout 被重定向——这是防止密文进入 AI 上下文/日志/管道的硬性限制）");
+        using var vault = Vault.Open(ctx.Home);
+        var entry = vault.Find(name) ?? throw new VaultException($"条目不存在：{name}");
+        return VerifyDisplay(ctx, vault, entry);
     }
 
     /// <summary>

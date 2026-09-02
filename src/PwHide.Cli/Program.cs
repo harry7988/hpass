@@ -53,7 +53,7 @@ public static class CliRunner
 
         try
         {
-            if (rest.Count == 0) return Usage(ctx, "用法：pwhide <init|set|list|inspect|delete|rename|exec|rotate|harden|doctor|version> [选项]");
+            if (rest.Count == 0) return Usage(ctx, "用法：pwhide <init|set|list|inspect|delete|rename|exec|verify|rotate|harden|doctor|version> [选项]");
             var cmd = rest[0];
             var cmdArgs = rest.Skip(1).ToArray();
             return cmd switch
@@ -65,6 +65,7 @@ public static class CliRunner
                 "delete" => Commands.Delete(ctx, cmdArgs),
                 "rename" => Commands.Rename(ctx, cmdArgs),
                 "exec" => ExecCommand.Run(ctx, cmdArgs),
+                "verify" => Commands.Verify(ctx, cmdArgs),
                 "rotate" => Commands.Rotate(ctx, cmdArgs),
                 "harden" => Commands.Harden(ctx, cmdArgs),
                 "_install-staged" => Commands.InstallStaged(ctx, cmdArgs),
@@ -114,6 +115,7 @@ public static class CliRunner
             pwhide exec [选项] -- <命令…>             填充+执行+脱敏
             pwhide exec [选项] -f <脚本>              脚本 stdin 模式（不落盘）
             pwhide rotate                             更换身份密钥对
+            pwhide verify <名>                        人工核验：解密显示密码/字段（需终端手输主口令）
             pwhide keychain set|clear|status          主口令存入系统钥匙串（配置后 exec 零交互）
             pwhide harden / doctor / version
             pwhide doctor --output-encoding <auto|utf8|utf16|gbk|json>
