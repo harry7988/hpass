@@ -10,14 +10,27 @@ public sealed class CliContext
     public required TextReader In { get; init; }
     public bool Interactive { get; init; } = true;
     public string Home { get; set; } = Vault.DefaultHome();
+    /// <summary>Out/Err 是否为真实控制台句柄（Windows 下走 WriteConsoleW，中文 cmd 不乱码；重定向/管道/测试内存流恒为 UTF-8）。</summary>
+    internal bool OutIsConsole { get; init; }
+    internal bool ErrIsConsole { get; init; }
 
     private TextWriter? _outText;
     private TextWriter? _errText;
-    public TextWriter OutText => _outText ??= NewWriter(Out);
-    public TextWriter ErrText => _errText ??= NewWriter(Err);
+    public TextWriter OutText => _outText ??= NewWriter(Out, OutIsConsole, stderr: false);
+    public TextWriter ErrText => _errText ??= NewWriter(Err, ErrIsConsole, stderr: true);
 
-    private static TextWriter NewWriter(Stream s) =>
-        new StreamWriter(s, new UTF8Encoding(false), 1024, leaveOpen: true) { AutoFlush = true };
+    private static readonly UTF8Encoding Utf8NoBom = new(false);
+
+    /// <summary>
+    /// 输出编码/通道选择：真实 Windows 控制台 → WriteConsoleW（UTF-16 直写，与控制台代码页无关，
+    /// 亦不依赖 InvariantGlobalization 下不可用的代码页转码；OpenStandardOutput 直写 UTF-8 到
+    /// GBK 控制台会产生"鏈壘鍒?"式乱码）；重定向到文件/管道时无代码页语义，一律 UTF-8
+    /// （与 exec 子进程链路的约定一致）。
+    /// </summary>
+    private static TextWriter NewWriter(Stream s, bool isConsole, bool stderr) =>
+        WindowsConsoleWriter.TryCreate(s, isConsole, stderr, out var consoleWriter)
+            ? consoleWriter
+            : new StreamWriter(s, Utf8NoBom, 1024, leaveOpen: true) { AutoFlush = true };
 }
 
 public static class CliRunner
@@ -31,6 +44,9 @@ public static class CliRunner
             Err = stderr ?? Console.OpenStandardError(),
             In = stdin ?? Console.In,
             Interactive = interactive,
+            // 真实 CLI 运行（未显式传流）且句柄是控制台时，才按控制台代码页输出；测试传入内存流恒为 UTF-8
+            OutIsConsole = stdout is null && !Console.IsOutputRedirected,
+            ErrIsConsole = stderr is null && !Console.IsErrorRedirected,
         };
 
         // 全局选项 --home <dir>：只认命令名之前的位置（第 0/1 个 token），
