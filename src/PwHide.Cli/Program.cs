@@ -14,6 +14,8 @@ public sealed class CliContext
     /// 管道→按会话控制台代码页转码、文件→UTF-8；测试传入内存流恒 false → 恒 UTF-8（除非显式配置覆盖）。</summary>
     internal bool OutIsStd { get; init; }
     internal bool ErrIsStd { get; init; }
+    /// <summary>In 是否为进程标准输入（真实 CLI 运行）。测试注入 TextReader 恒 false。</summary>
+    internal bool InIsStd { get; init; }
 
     private TextWriter? _outText;
     private TextWriter? _errText;
@@ -36,6 +38,7 @@ public static class CliRunner
             // 测试传入内存流恒 false → UTF-8。通道判定以句柄真实类型为准（见 OutputChannel）
             OutIsStd = stdout is null,
             ErrIsStd = stderr is null,
+            InIsStd = stdin is null,
         };
 
         // 全局选项 --home <dir>：只认命令名之前的位置（第 0/1 个 token），
@@ -58,6 +61,25 @@ public static class CliRunner
             if (rest.Count == 0) return Usage(ctx, "用法：pwhide <init|set|list|inspect|delete|rename|exec|verify|rotate|harden|doctor|language|version> [选项]");
             var cmd = rest[0];
             var cmdArgs = rest.Skip(1).ToArray();
+
+            // 每命令帮助：<cmd> -h/--help（仅首参位置——exec -- 后的 -h 属于子命令）；
+            // 以及 pwhide help <cmd> 的定向帮助
+            if (cmdArgs.Length > 0 && cmdArgs[0] is "-h" or "--help" && CommandHelp.Has(cmd))
+            {
+                ctx.OutText.WriteLine(CommandHelp.Get(cmd));
+                return ExitCodes.Ok;
+            }
+            if ((cmd == "help" || cmd == "--help" || cmd == "-h") && cmdArgs.Length > 0)
+            {
+                var hc = cmdArgs[0];
+                if (hc is not ("--help" or "-h") && CommandHelp.Has(hc))
+                {
+                    ctx.OutText.WriteLine(CommandHelp.Get(hc));
+                    return ExitCodes.Ok;
+                }
+                if (hc is "--help" or "-h") return Usage(ctx, "");
+            }
+
             return cmd switch
             {
                 "init" => Commands.Init(ctx, cmdArgs),
@@ -75,7 +97,7 @@ public static class CliRunner
                 "keychain" => Commands.KeychainCmd(ctx, cmdArgs),
                 "language" => Commands.LanguageCmd(ctx, cmdArgs),
                 "version" or "--version" or "-v" => VersionCmd(ctx),
-                "help" or "--help" or "-h" => Usage(ctx, ""),
+                 "help" or "--help" or "-h" => Usage(ctx, ""),
                 _ => Usage(ctx, $"未知命令：{cmd}"),
             };
         }
@@ -130,6 +152,8 @@ public static class CliRunner
                        --timeout 秒(默认120)  --allow-echo(放行回显探测拦截)  --home <目录>
                        --ph #|@（占位符定界符，默认 {{name}}；脚本中 # 与注释冲突时用 @）
                        --verify（执行前人工核对：需交互终端手输主口令，展示解密值并确认）
+            每个命令都支持 -h / --help 查看详细用法（如 pwhide exec -h）；
+            pwhide help <命令> 同效。
             环境变量：PWHIDE_HOME / PWHIDE_PASSPHRASE / PWHIDE_PASSPHRASE_FILE / PWHIDE_OUTPUT_ENCODING / PWHIDE_NO_KEYCHAIN
             """);
         return ExitCodes.Usage;

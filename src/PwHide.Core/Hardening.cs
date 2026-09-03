@@ -336,13 +336,15 @@ public static class Hardening
     public static string Describe(string home)
     {
         var file = Path.Combine(home, CoreFiles[0]);
-        if (!File.Exists(file)) return "未知";
+        if (!File.Exists(file)) return Loc.T("unknown", "未知");
         if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS())
         {
             var mode = File.GetUnixFileMode(file);
-            return mode.HasFlag(UnixFileMode.UserWrite) ? "用户级不可变（uchg）" : "管理员级（root 属主 + 不可变）";
+            return mode.HasFlag(UnixFileMode.UserWrite)
+                ? Loc.T("user-level immutable (uchg)", "用户级不可变（uchg）")
+                : Loc.T("admin level (root-owned + immutable)", "管理员级（root 属主 + 不可变）");
         }
-        return "ACL 拒写";
+        return Loc.T("ACL write-denied", "ACL 拒写");
     }
 
     /// <summary>

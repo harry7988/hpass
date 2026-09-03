@@ -1,5 +1,6 @@
 > English guide | 中文：[guide.zh-CN.md](guide.zh-CN.md)
 
+> **Note**: the CLI UI is English by default (matches this guide). To switch to Chinese: `pwhide language zh` or `export PWHIDE_LANG=zh`.
 # pwhide Illustrated Guide: from zero to everyday AI usage
 
 ## The problem it solves
@@ -42,9 +43,9 @@ After the three steps, the AI's world contains only `{{placeholders}}` and redac
 **Why it kept breaking**: the Windows console stacks decades of encoding history —
 
 1. cmd's code page is DOS-era OEM (Simplified Chinese = cp936/GBK), not UTF-8;
-2. one machine has three decoders: cmd uses OEM, PowerShell 5.1 pipes decode with `[Console]::OutputEncoding` (OEM by default), PowerShell 7 defaults to UTF-8 — plus Windows Terminal vs legacy conhost;
+2. one machine has three decoders: cmd uses OEM, PowerShell 5.1 pipes decode with `[Console]::OutputEncoding` (OEM by default), PowerShell 7 defaults to UTF-8;
 3. once output is piped or redirected the rules change entirely: raw bytes go to the consumer, and whoever reads them picks the decoder;
-4. old pwhide always wrote UTF-8 into pipes: read as GBK it turned into "鏈壘鍒?", read as UTF-16 into "睰楨敤".
+4. old pwhide always wrote UTF-8 into pipes: decoded as GBK it became `鏈?鎵惧埌 vault锛圕:...`; decoded as UTF-16LE it became `pwhide: 睰楨敤›鳦...` (the mojibake samples in the comparison image are computed from real binary output).
 
 **0.7+ auto-adapts**: real console → `WriteConsoleW` (codepage-independent); pipe → transcoded by the session console code page; file redirect → UTF-8.
 

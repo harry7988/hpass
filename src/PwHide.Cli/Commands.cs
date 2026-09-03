@@ -33,14 +33,15 @@ public static class Commands
         if (!ctx.Interactive)
             throw new VaultException("非交互环境需要解锁：请设置 PWHIDE_PASSPHRASE / PWHIDE_PASSPHRASE_FILE，或先运行 pwhide keychain set 存入系统钥匙串");
 
+        using var hidden = HiddenInput.Begin(ctx.In, ctx.Interactive);   // 先隐藏后提示：消除提示符与 stty 生效间的回显竞态
         ctx.ErrText.Write("主口令: ");
-        var first = HiddenInput.ReadLineHidden(ctx.In, ctx.Interactive);
+        var first = HiddenInput.ReadLine(hidden, ctx.In);
         first = CheckLength(first);
         if (first.Length < 8) throw new VaultException("口令至少需要 8 个字符");
         if (confirm)
         {
             ctx.ErrText.Write("再次确认: ");
-            var second = HiddenInput.ReadLineHidden(ctx.In, ctx.Interactive);
+            var second = HiddenInput.ReadLine(hidden, ctx.In);
             if (first != second) throw new VaultException("两次输入不一致");
         }
         return first;
@@ -66,6 +67,8 @@ public static class Commands
         var passphrase = GetPassphrase(ctx, confirm: true);
         using var vault = Vault.Create(ctx.Home, passphrase);
         ctx.OutText.WriteLine($"已初始化：{ctx.Home}");
+        ctx.OutText.WriteLine(Loc.T("next: pwhide keychain set (zero interaction) | pwhide set <name> (first credential)",
+            "下一步：pwhide keychain set（免交互）| pwhide set <名>（录入第一条凭据）"));
         ctx.OutText.WriteLine(noHarden || !OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS() && !OperatingSystem.IsWindows()
             ? "文件保护：基础模式（目录 700 / 文件 600）。可随时运行 pwhide harden 升级为管理员写保护"
             : "文件保护：基础模式（目录 700 / 文件 600）。可运行 pwhide harden 启用管理员写保护（仅整体覆盖）");
@@ -120,11 +123,12 @@ public static class Commands
         }
         else if (ctx.Interactive)
         {
+            using var hidden = HiddenInput.Begin(ctx.In, ctx.Interactive);   // 先隐藏后提示
             ctx.ErrText.Write($"密码（{name}）: ");
-            password = HiddenInput.ReadLineHidden(ctx.In, ctx.Interactive);
+            password = HiddenInput.ReadLine(hidden, ctx.In);
             password = password.Trim();
             ctx.ErrText.Write("再次确认: ");
-            if (HiddenInput.ReadLineHidden(ctx.In, ctx.Interactive).Trim() != password)
+            if (HiddenInput.ReadLine(hidden, ctx.In).Trim() != password)
                 throw new VaultException("两次输入不一致");
         }
         else throw new UsageException("非交互环境请使用 --password-stdin 从 stdin 提供密码（禁止命令行明文传密码）");
@@ -148,20 +152,25 @@ public static class Commands
             if (fvalue is not null) value = fvalue;
             else if (ctx.Interactive)
             {
+                using var hidden = HiddenInput.Begin(ctx.In, ctx.Interactive);
                 ctx.ErrText.Write($"字段 {fname} 的值: ");
-                value = HiddenInput.ReadLineHidden(ctx.In, ctx.Interactive);
+                value = HiddenInput.ReadLine(hidden, ctx.In);
             }
             else throw new UsageException($"非交互环境请用 -f {fname}=<值> 提供字段值");
 
             // 交互式逐字段询问是否加密（-pf 已显式选明文，不再问）。
-            // 回车取默认：形似敏感（key/token/secret…）默认加密，其余（IP/协议/端口等）默认明文
+            // 回车取默认：形似敏感（key/token/secret…）默认加密，其余（IP/协议/端口等）默认明文。
+            // stdin 被重定向（AI/脚本场景，无人应答）时跳过询问：-f 一律加密（安全默认，
+            //  防止 EOF 空回答静默把字段降级为明文；要明文请显式 -pf）
             var encrypt = plainFlag ? false : true;
             if (!plainFlag && ctx.Interactive)
             {
                 var sensitive = LooksSensitive(fname);
                 ctx.ErrText.Write($"字段 {fname} 是否敏感、需要加密存储？[{(sensitive ? "Y/n" : "y/N")}] ");
                 var ans = (ctx.In.ReadLine() ?? "").Trim().ToLowerInvariant();
-                encrypt = ans.Length == 0 ? sensitive : ans is "y" or "yes";
+                // 空 answers 的安全默认：真终端回车 → 按字段名启发式；
+                // 管道 EOF（AI/脚本无人应答）→ 一律加密（防止 -f 静默降级为明文）
+                encrypt = ans.Length == 0 ? (sensitive || Console.IsInputRedirected) : ans is "y" or "yes";
             }
 
             value = value.Trim();
@@ -183,6 +192,8 @@ public static class Commands
         }
         vault.Save();
         ctx.OutText.WriteLine($"已保存条目 {name}（{vault.Data.Entries.Count} 个条目）");
+        ctx.OutText.WriteLine(Loc.T($"next: pwhide inspect {name} (placeholders) | use {{{{{name}}}}} in pwhide exec",
+            $"下一步：pwhide inspect {name}（查看占位符）| 在 pwhide exec 中使用 {{{{{name}}}}}"));
         return ExitCodes.Ok;
     }
 
@@ -200,8 +211,9 @@ public static class Commands
     {
         if (!IsHumanTerminal(ctx))
             throw new UsageException("--verify 需要在真实交互终端运行并手动输入主口令（当前为非交互或 stdin/stdout 被重定向——这是防止密文进入 AI 上下文/日志/管道的硬性限制）");
+        using var hidden = HiddenInput.Begin(ctx.In, ctx.Interactive);
         ctx.ErrText.Write("主口令（--verify 手输）: ");
-        return CheckLength(HiddenInput.ReadLineHidden(ctx.In, ctx.Interactive));
+        return CheckLength(HiddenInput.ReadLine(hidden, ctx.In));
     }
 
     /// <summary>终端确认提问（仅 --verify 流程使用），默认否。</summary>
@@ -221,8 +233,9 @@ public static class Commands
 
     private static string HiddenInputWithPrompt(CliContext ctx, string prompt)
     {
+        using var hidden = HiddenInput.Begin(ctx.In, ctx.Interactive);
         ctx.ErrText.Write(prompt);
-        return HiddenInput.ReadLineHidden(ctx.In, ctx.Interactive);
+        return HiddenInput.ReadLine(hidden, ctx.In);
     }
 
     public static int List(CliContext ctx, string[] args)
@@ -232,7 +245,7 @@ public static class Commands
         var metas = vault.Data.Entries.Select(e => ToMeta(e)).ToList();
         if (json)
         {
-            ctx.OutText.Write(JsonSerializer.Serialize(metas, PwHideJsonContext.Default.ListEntryMeta));
+            ctx.OutText.WriteLine(JsonSerializer.Serialize(metas, PwHideJsonContext.Default.ListEntryMeta));
             return ExitCodes.Ok;
         }
         if (metas.Count == 0) { ctx.OutText.WriteLine("（vault 为空，用 pwhide set <名> 录入）"); return ExitCodes.Ok; }
@@ -256,7 +269,7 @@ public static class Commands
         if (verify)
             return VerifyDisplay(ctx, vault, entry);
         if (json)
-            ctx.OutText.Write(JsonSerializer.Serialize(meta, PwHideJsonContext.Default.EntryMeta));
+            ctx.OutText.WriteLine(JsonSerializer.Serialize(meta, PwHideJsonContext.Default.EntryMeta));
         else
         {
             ctx.OutText.WriteLine(Loc.T($"name: {meta.Name}", $"名称: {meta.Name}"));
@@ -492,6 +505,16 @@ public static class Commands
         ctx.OutText.WriteLine($"platform : {System.Runtime.InteropServices.RuntimeInformation.OSDescription} {System.Runtime.InteropServices.RuntimeInformation.OSArchitecture}");
         foreach (var line in OutputChannel.Describe(ctx.Home))
             ctx.OutText.WriteLine(line);
+        ctx.OutText.WriteLine(Loc.T($"language  : {Loc.Lang} ({Loc.Source(ctx.Home)}; pwhide language en|zh)",
+            $"语言      : {Loc.Lang}（{Loc.Source(ctx.Home)}；pwhide language en|zh）"));
+        if (Environment.GetEnvironmentVariable("PWHIDE_NO_KEYCHAIN") != "1" && Keychain.IsSupported)
+        {
+            var stored = Keychain.TryGet(ctx.Home, out _);
+            ctx.OutText.WriteLine(Loc.T(stored
+                ? "keychain  : stored (zero-interaction)"
+                : "keychain  : not stored (pwhide keychain set enables zero-interaction)",
+                stored ? "钥匙串    : 已存主口令（零交互）" : "钥匙串    : 未存储（pwhide keychain set 可免交互）"));
+        }
         var ok = true;
 
         // 安装残留报告：必须在 Vault.Exists 判断之外——"final 缺失、orig 是旧库唯一副本"的恢复场景恰在此
@@ -658,9 +681,13 @@ public static class Commands
                 {
                     if (!ctx.Interactive)
                         throw new VaultException("非交互环境请用 PWHIDE_PASSPHRASE=<主口令> pwhide keychain set 完成一次配置");
+                    using var hidden = HiddenInput.Begin(ctx.In, ctx.Interactive);
                     ctx.ErrText.Write("主口令: ");
-                    pass = CheckLength(HiddenInput.ReadLineHidden(ctx.In, ctx.Interactive));
+                    pass = CheckLength(HiddenInput.ReadLine(hidden, ctx.In));
                 }
+                // 尾随换行的口令无法经 macOS security 回读（回读会 TrimEnd \n）——直接拒绝，避免静默坏库
+                if (pass.EndsWith('\n') || pass.EndsWith('\r'))
+                    throw new UsageException("口令不能以换行/回车结尾（钥匙串回读无法保真）。请重新输入");
                 // 先验证口令确实能解锁当前 vault，防止把错误口令入库导致后续全部命令失败
                 using (var vault = Vault.Open(ctx.Home))
                     vault.Unlock(pass);

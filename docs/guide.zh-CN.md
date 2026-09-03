@@ -1,5 +1,6 @@
 > 中文指南 | English: [guide.en.md](guide.en.md)
 
+> **提示**：pwhide 界面默认英文。跟着本中文指南操作前，建议先执行 `pwhide language zh`（或 `export PWHIDE_LANG=zh`），命令提示就是中文了。
 # pwhide 图文指南：从零到 AI 日常使用
 
 ## 它解决什么问题
@@ -42,9 +43,9 @@
 **为什么一直出问题**：Windows 控制台的编码是"多层历史叠加"——
 
 1. **cmd 的代码页是 DOS 时代的 OEM**（简体中文 = cp936/GBK），不是 UTF-8；
-2. **一台机器上有三套解码器**：cmd 用 OEM、PowerShell 5.1 管道用 `[Console]::OutputEncoding`（默认也是 OEM）、PowerShell 7 默认 UTF-8，还有 Windows Terminal 与老 conhost 的差异；
+2. **一台机器上有三套解码器**：cmd 用 OEM、PowerShell 5.1 管道用 `[Console]::OutputEncoding`（默认也是 OEM）、PowerShell 7 默认 UTF-8；
 3. **输出一旦被管道/重定向，规则全变**：子进程的原始字节直接交给消费者，用哪个解码器取决于调用方——同一个程序，在 cmd 里好、到 PowerShell 管道里就乱；
-4. 旧版 pwhide 管道恒定输出 UTF-8：被 GBK 逐字节误读就是"鏈壘鍒？"，被 PowerShell 的 Unicode 会话按 UTF-16 两两成对误读就是"睰楨敤"。
+4. 旧版 pwhide 管道恒定输出 UTF-8：被 GBK 逐字节误读就成了 `鏈?鎵惧埌 vault锛圕:...`，被 PowerShell 的 Unicode 会话按 UTF-16 两两成对误读就成了 `pwhide: 睰楨敤›鳦...`（下面对比图里的乱码均由真实二进制输出反算）。
 
 **0.7+ 的自动适配**：真控制台 → `WriteConsoleW` 直写（与代码页无关）；管道 → 按会话控制台代码页转码；文件重定向 → UTF-8。
 
@@ -67,5 +68,6 @@ pwhide doctor --output-encoding gbk  # 或 utf8 / utf16 / json（纯 ASCII 永�
 - 未知占位符（退出码 4）：`pwhide list` 核对条目名；不存在就本人 `pwhide set`；
 - 口令相关（退出码 3）：`pwhide keychain set` 或 `PWHIDE_PASSPHRASE_FILE`；
 - 与 Helm/Jinja 模板冲突：`exec --ph '#'`，占位符写 `#db#`；
+- 回显探测口径：echo/printf 与密文占位符（或 `--env` 注入）共现即拦截，`--allow-echo` 放行；
 - 超时 124：加 `--timeout`；
 - 环境自检：`pwhide doctor`。

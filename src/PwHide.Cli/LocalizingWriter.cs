@@ -35,7 +35,10 @@ public sealed class LocalizingWriter(TextWriter inner) : TextWriter
         for (var i = 0; i < parts.Length; i++)
         {
             if (i > 0) inner.Write('\n');
-            inner.Write(Loc.Tr(parts[i].TrimEnd('\r')));
+            // 只裁属于 \r\n 拆分产生的 \r；行内容自身的 \r（如 --verify 显示的秘密尾字符）原样保留
+            var line = parts[i];
+            var stripCr = i < parts.Length - 1 && line.EndsWith('\r');
+            inner.Write(Loc.Tr(stripCr ? line[..^1] : line));
         }
         if (newline) inner.Write(NewLine);
     }

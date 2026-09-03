@@ -242,6 +242,8 @@ public static partial class Loc
         "类型: *    账号: *    租户: *||type: *    user: *    tenant: *",
         "密码: 已设置（只能经 {{*}} 注入）||password: set (injected only via {{*}})",
         "明文字段（非敏感，元数据可见）: *||plain fields (non-sensitive, visible in metadata): *",
+"*每个命令都支持 -h / --help 查看详细用法（如 pwhide exec -h）；||*every command supports -h / --help for details (e.g. pwhide exec -h);",
+"*pwhide help <命令> 同效。||*pwhide help <command> is equivalent.",
         // ---------- language 命令（自身消息在 Commands 内用 Loc.T 双语直出） ----------
     ];
 

@@ -99,4 +99,4 @@ pwhide set <条目名> -t <类型:database|ssh|api|cloud|自定义> -u <账号> 
 4. `pwhide init` —— 主口令由用户本人输入（基础模式 700/600）；随后建议执行 `pwhide harden` 启用管理员级写保护（sudo/UAC 属正常）；
 5. `pwhide doctor` 验证；引导用户录入首批凭据；如需人工验证脱敏：`pwhide exec --allow-echo -- echo {{条目名}}`（直接回显占位符会被拒绝）。
 
-> 注：pwhide 处于开发中，本 skill 描述 v1 目标行为。若命令不存在或行为不符，提示用户当前里程碑尚未实现，**不要臆造替代方案**（尤其不要退回到"把密码贴进对话"）。
+> 注：
