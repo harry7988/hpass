@@ -520,7 +520,13 @@ public static class Commands
             ctx.OutText.WriteLine(line);
         ctx.OutText.WriteLine(Loc.T($"language : {Loc.Lang} ({Loc.Source(ctx.Home)}; pwhide language en|zh)",
             $"语言     : {Loc.Lang}（{Loc.Source(ctx.Home)}；pwhide language en|zh）"));
-        if (Environment.GetEnvironmentVariable("PWHIDE_NO_KEYCHAIN") != "1" && Keychain.IsSupported)
+        if (Environment.GetEnvironmentVariable("PWHIDE_NO_KEYCHAIN") == "1")
+            ctx.OutText.WriteLine(Loc.T("keychain : disabled (PWHIDE_NO_KEYCHAIN=1)",
+                "钥匙串   : 已通过 PWHIDE_NO_KEYCHAIN=1 禁用"));
+        else if (!Keychain.IsSupported)
+            ctx.OutText.WriteLine(Loc.T("keychain : unavailable on this platform",
+                "钥匙串   : 当前平台不可用"));
+        else
         {
             var stored = Keychain.TryGet(ctx.Home, out _);
             ctx.OutText.WriteLine(Loc.T(stored

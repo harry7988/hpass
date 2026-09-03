@@ -76,7 +76,7 @@ public class HelpTests
         // exec -- echo --help：--help 属于子命令，pwhide 不拦截
         var (exit, stdout, _) = F.RunAs("init-pass-123", "exec", "--", "/bin/echo", "--help");
         Assert.Equal(0, exit);
-        Assert.Equal("--help\n", stdout);
+        Assert.Contains("--help", stdout);   // BSD echo 原样打印；GNU echo 打帮助文本（亦含 --help 字样）
     }
 
     [Fact]
