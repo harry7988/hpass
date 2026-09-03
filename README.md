@@ -30,6 +30,10 @@ AI receives: mysql: [output] ...  (any password in the output is replaced with {
 - **Windows console encoding, fixed for real**: a genuine console handle writes via `WriteConsoleW` (any code page); a pipe transcodes using the session's console code page (which is exactly what PowerShell decodes with); file redirects stay UTF-8. Still garbled? `pwhide doctor --output-encoding <auto|utf8|utf16|gbk|json>` forces it globally (`json` escapes non-ASCII to `\uXXXX` and is readable on any terminal).
 - **C# Native AOT single-file binaries**: six RIDs across macOS / Linux / Windows, zero runtime dependencies.
 
+## Illustrated guide
+
+A visual walkthrough (workflow diagram, terminal sessions, the Windows-encoding before/after, and the byte-level encoding verification report) lives at [docs/guide.en.md](docs/guide.en.md) and on the website: www.pwhide.com → **Guide**. 中文版：[docs/guide.zh-CN.md](docs/guide.zh-CN.md)。
+
 ## Quick start
 
 ```bash
