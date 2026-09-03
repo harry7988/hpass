@@ -34,9 +34,9 @@ public static class Keychain
 
     public static string Describe() =>
         OperatingSystem.IsMacOS() ? "macOS Keychain(/usr/bin/security)"
-        : OperatingSystem.IsWindows() ? "Windows 凭据管理器"
-        : FindOnPath("secret-tool") is not null ? "Linux Secret Service(secret-tool)"
-        : "当前平台不可用（Linux 需安装 secret-tool / libsecret）";
+        : OperatingSystem.IsWindows() ? Loc.T("Windows Credential Manager", "Windows 凭据管理器")
+        : FindOnPath("secret-tool") is not null ? "Linux Secret Service (secret-tool)"
+        : Loc.T("unavailable on this platform (Linux needs secret-tool / libsecret)", "当前平台不可用（Linux 需安装 secret-tool / libsecret）");
 
     /// <summary>读取当前 home 对应槽位的主口令。未存储返回 false。</summary>
     public static bool TryGet(string home, out string passphrase)

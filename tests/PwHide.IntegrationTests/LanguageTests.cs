@@ -81,6 +81,20 @@ public class LanguageTests : IDisposable
     }
 
     [Fact]
+    public void DefaultEnglish_KeychainStatusUnsupportedPlatform_NoCjk()
+    {
+        // 模拟 Linux 无 secret-tool / 任意"不可用"平台：Describe 输出必须已双语（CI 三平台的差异面）
+        var prev = Keychain.HookIsSupported;
+        Keychain.HookIsSupported = () => false;
+        try
+        {
+            var (_, stdout, _) = Run("keychain", "status");
+            AssertNoCjk(stdout);
+        }
+        finally { Keychain.HookIsSupported = prev; }
+    }
+
+    [Fact]
     public void DefaultEnglish_DoctorAndKeychainStatus_NoCjk()
     {
         var (_, stdout, _) = Run("doctor");
