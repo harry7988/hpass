@@ -1,0 +1,21 @@
+Test run for /home/runner/work/pwhide/pwhide/tests/PwHide.Core.Tests/bin/Debug/net10.0/PwHide.Core.Tests.dll (.NETCoreApp,Version=v10.0)
+Test run for /home/runner/work/pwhide/pwhide/tests/PwHide.IntegrationTests/bin/Debug/net10.0/PwHide.IntegrationTests.dll (.NETCoreApp,Version=v10.0)
+A total of 1 test files matched the specified pattern.
+A total of 1 test files matched the specified pattern.
+
+Passed!  - Failed:     0, Passed:   140, Skipped:     0, Total:   140, Duration: 21 s - PwHide.Core.Tests.dll (net10.0)
+[xUnit.net 00:00:26.50]     PwHide.IntegrationTests.LanguageTests.DefaultEnglish_DoctorAndKeychainStatus_NoCjk [FAIL]
+  Failed PwHide.IntegrationTests.LanguageTests.DefaultEnglish_DoctorAndKeychainStatus_NoCjk [4 ms]
+  Error Message:
+   en 模式输出仍含中文：platform support : 当前平台不可用（Linux 需安装 secret-tool / libsecret）
+status : unavailable (see above)
+
+  Stack Trace:
+     at PwHide.IntegrationTests.LanguageTests.AssertNoCjk(String[] texts) in /home/runner/work/pwhide/pwhide/tests/PwHide.IntegrationTests/LanguageTests.cs:line 44
+   at PwHide.IntegrationTests.LanguageTests.DefaultEnglish_DoctorAndKeychainStatus_NoCjk() in /home/runner/work/pwhide/pwhide/tests/PwHide.IntegrationTests/LanguageTests.cs:line 90
+   at System.RuntimeMethodHandle.InvokeMethod(ObjectHandleOnStack target, Void** arguments, ObjectHandleOnStack sig, BOOL isConstructor, ObjectHandleOnStack result)
+   at System.RuntimeMethodHandle.InvokeMethod(ObjectHandleOnStack target, Void** arguments, ObjectHandleOnStack sig, BOOL isConstructor, ObjectHandleOnStack result)
+   at System.Reflection.MethodBaseInvoker.InterpretedInvoke_Method(Object obj, IntPtr* args)
+   at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)
+
+Failed!  - Failed:     1, Passed:   131, Skipped:     0, Total:   132, Duration: 53 s - PwHide.IntegrationTests.dll (net10.0)
