@@ -25,7 +25,6 @@ jobs:
       - name: Test
         shell: bash
         run: dotnet test --no-build -c Debug 2>&1 | tee test.log; exit ${PIPESTATUS[0]}
-      - name: Publish failure diagnostics
       - name: Upload test log on failure
         if: failure()
         uses: actions/upload-artifact@v4
@@ -33,6 +32,7 @@ jobs:
           name: test-log-${{ matrix.os }}
           path: test.log
           if-no-files-found: ignore
+      - name: Publish failure diagnostics
         if: failure()
         shell: bash
         run: |
@@ -40,8 +40,8 @@ jobs:
           mkdir -p diagnostics
           cp test.log "diagnostics/test-${{ matrix.os }}.log"
           git add diagnostics
-          git commit -m "diag: ${{ matrix.os }}"
-          git push origin HEAD:ci-diag/${{ matrix.os }}
+          git commit -m "diag: ${{ matrix.os }}" || true
+          git push origin HEAD:ci-diag/${{ matrix.os }} || true
 
   aot:
     name: AOT smoke (${{ matrix.rid }})
