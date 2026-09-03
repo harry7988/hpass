@@ -219,7 +219,6 @@ public static partial class Loc
         "另一个 pwhide 写操作长时间未完成（等待 60s 未能获得锁），请稍后重试||another pwhide write is taking too long (could not acquire the lock within 60s); retry later",
         "另一个 pwhide 写操作正在进行（run/lock 被占用）||another pwhide write is in progress (run/lock held)",
         "run/lock 无法访问（属主异常，多为 sudo 运行遗留）：可删除 * 后重试，或再运行一次 sudo 命令由其自动归还属主||run/lock inaccessible (odd owner, usually sudo leftovers): delete * and retry, or rerun a sudo command to hand ownership back",
-        "* * 非法：仅允许字母/数字/下划线/连字符，以字母或数字开头，长度 1-64（'.' 为占位符分隔符，不允许出现在名字中）||invalid * *: only letters/digits/underscore/hyphen, starting with a letter or digit, length 1-64 ('.' is the placeholder separator and not allowed in names)",
 
         "*pwhide — 本地密码代填执行器（密码只进进程，不出终端）||*pwhide - local password proxy executor (secrets go into processes, never onto your terminal)",
         "*全局手工指定输出编码（乱码兜底）||*globally force the output encoding (mojibake fallback)",

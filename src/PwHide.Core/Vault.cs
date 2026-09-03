@@ -261,7 +261,8 @@ public sealed class Vault : IDisposable
         if (name.Length == 0 || name.Length > 64 ||
             !char.IsAsciiLetterOrDigit(name[0]) && name[0] != '_' ||
             name.Any(c => !char.IsAsciiLetterOrDigit(c) && c is not '_' and not '-'))
-            throw new UsageException($"{what} {name} 非法：仅允许字母/数字/下划线/连字符，以字母或数字开头，长度 1-64（'.' 为占位符分隔符，不允许出现在名字中）");
+            throw new UsageException(Loc.T($"{(what == "字段名" ? "field" : "entry")} name {name} invalid: only letters/digits/underscore/hyphen, starting with a letter or digit, length 1-64 ('.' is the placeholder separator and not allowed in names)",
+                $"{what} {name} 非法：仅允许字母/数字/下划线/连字符，以字母或数字开头，长度 1-64（'.' 为占位符分隔符，不允许出现在名字中）"));
     }
 
     /// <summary>
