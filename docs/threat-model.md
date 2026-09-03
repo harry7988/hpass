@@ -1,5 +1,7 @@
 # pwhide 威胁模型
 
+> English edition: [threat-model.en.md](threat-model.en.md)
+
 > 本文如实声明 pwhide 防什么、不防什么。目标是"防密码意外进入 AI 上下文 / 日志 / 备份"，不是对抗已提权的恶意软件。
 > 与实现同步维护；行为变化须先改这里。总体设计见 [PLAN.md](../PLAN.md)。
 

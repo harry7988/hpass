@@ -17,8 +17,8 @@ public sealed class CliContext
 
     private TextWriter? _outText;
     private TextWriter? _errText;
-    public TextWriter OutText => _outText ??= OutputChannel.Create(Out, stderr: false, OutIsStd, Home);
-    public TextWriter ErrText => _errText ??= OutputChannel.Create(Err, stderr: true, ErrIsStd, Home);
+    public TextWriter OutText => _outText ??= new LocalizingWriter(OutputChannel.Create(Out, stderr: false, OutIsStd, Home));
+    public TextWriter ErrText => _errText ??= new LocalizingWriter(OutputChannel.Create(Err, stderr: true, ErrIsStd, Home));
 }
 
 public static class CliRunner
@@ -51,9 +51,11 @@ public static class CliRunner
             }
         }
 
+        Loc.Load(ctx.Home);   // 语言解析：PWHIDE_LANG > home/language > 默认 en（输出边界按此翻译）
+
         try
         {
-            if (rest.Count == 0) return Usage(ctx, "用法：pwhide <init|set|list|inspect|delete|rename|exec|verify|rotate|harden|doctor|version> [选项]");
+            if (rest.Count == 0) return Usage(ctx, "用法：pwhide <init|set|list|inspect|delete|rename|exec|verify|rotate|harden|doctor|language|version> [选项]");
             var cmd = rest[0];
             var cmdArgs = rest.Skip(1).ToArray();
             return cmd switch
@@ -71,6 +73,7 @@ public static class CliRunner
                 "_install-staged" => Commands.InstallStaged(ctx, cmdArgs),
                 "doctor" => Commands.Doctor(ctx, cmdArgs),
                 "keychain" => Commands.KeychainCmd(ctx, cmdArgs),
+                "language" => Commands.LanguageCmd(ctx, cmdArgs),
                 "version" or "--version" or "-v" => VersionCmd(ctx),
                 "help" or "--help" or "-h" => Usage(ctx, ""),
                 _ => Usage(ctx, $"未知命令：{cmd}"),
@@ -89,7 +92,8 @@ public static class CliRunner
         catch (PlaceholderException e)
         {
             // 不变式 I5：错误信息只含条目名/占位符，绝不含解析后的值
-            ctx.ErrText.WriteLine($"pwhide: 未知占位符 {e.Token}（{e.Message}）。可用 pwhide list 查询已有条目");
+            ctx.ErrText.WriteLine(Loc.T($"pwhide: unknown placeholder {e.Token} ({Loc.Tr(e.Message)}). run pwhide list to see existing entries",
+                $"pwhide: 未知占位符 {e.Token}（{Loc.Tr(e.Message)}）。可用 pwhide list 查询已有条目"));
             return ExitCodes.UnknownPlaceholder;
         }
         catch (Exception e)
@@ -117,6 +121,7 @@ public static class CliRunner
             pwhide rotate                             更换身份密钥对
             pwhide verify <名>                        人工核验：解密显示密码/字段（需终端手输主口令）
             pwhide keychain set|clear|status          主口令存入系统钥匙串（配置后 exec 零交互）
+            pwhide language en|zh                      界面语言（默认英文；PWHIDE_LANG 可覆盖）
             pwhide harden / doctor / version
             pwhide doctor --output-encoding <auto|utf8|utf16|gbk|json>
                                                     全局手工指定输出编码（乱码兜底）

@@ -1,5 +1,6 @@
 using System.Runtime.InteropServices;
 using System.Text;
+using PwHide.Core;
 
 namespace PwHide.Cli;
 
@@ -99,9 +100,9 @@ public static class OutputChannel
         var env = Environment.GetEnvironmentVariable(EnvVar);
         var normalized = NormalizeOverride(env);
         if (env is not null && normalized is null)
-            return (null, $"环境变量 {EnvVar}={env} 无效（可用 auto|utf8|utf16|gbk|json），已忽略");
+            return (null, Loc.T($"env {EnvVar}={env} invalid (allowed auto|utf8|utf16|gbk|json), ignored", $"环境变量 {EnvVar}={env} 无效（可用 auto|utf8|utf16|gbk|json），已忽略"));
         if (normalized is not null)
-            return (normalized, $"环境变量 {EnvVar}={normalized}");
+            return (normalized, Loc.T($"env {EnvVar}={normalized}", $"环境变量 {EnvVar}={normalized}"));
         try
         {
             var file = Path.Combine(home, FileName);
@@ -109,12 +110,12 @@ public static class OutputChannel
             {
                 normalized = NormalizeOverride(File.ReadAllText(file).Trim());
                 if (normalized is not null)
-                    return (normalized, $"配置文件 {file}：{normalized}");
-                return (null, $"配置文件 {file} 内容无效，已忽略");
+                    return (normalized, Loc.T($"file {file}: {normalized}", $"配置文件 {file}：{normalized}"));
+                return (null, Loc.T($"config file {file} invalid, ignored", $"配置文件 {file} 内容无效，已忽略"));
             }
         }
         catch (IOException) { }
-        return (null, "自动");
+        return (null, Loc.T("auto", "自动"));
     }
 
     /// <summary>doctor 用的输出通道诊断行。</summary>
@@ -122,15 +123,15 @@ public static class OutputChannel
     {
         var lines = new List<string>();
         var (mode, source) = ResolveOverride(home);
-        lines.Add($"输出编码 : {source}");
+        lines.Add(Loc.T($"output encoding : {source}", $"输出编码 : {source}"));
         if (mode is not null and not "auto")
         {
-            lines.Add($"输出通道 : 手工指定（{mode}）");
+            lines.Add(Loc.T($"output channel : manual ({mode})", $"输出通道 : 手工指定（{mode}）"));
             return lines;
         }
         if (!OperatingSystem.IsWindows())
         {
-            lines.Add("输出通道 : UTF-8（非 Windows 恒 UTF-8）");
+            lines.Add(Loc.T("output channel : UTF-8 (always UTF-8 outside Windows)", "输出通道 : UTF-8（非 Windows 恒 UTF-8）"));
             return lines;
         }
         var handle = WindowsConsoleWriter.StdHandle(stderr);
@@ -138,12 +139,12 @@ public static class OutputChannel
         var cp = GetConsoleOutputCP();
         var channel = ft switch
         {
-            WindowsConsoleWriter.FileTypeChar => "控制台 → WriteConsoleW 直写（与代码页无关）",
-            WindowsConsoleWriter.FileTypePipe when cp != 0 => $"管道 → 按控制台代码页 {cp} 转码（PowerShell 按 [Console]::OutputEncoding 解码）",
-            WindowsConsoleWriter.FileTypePipe => "管道 → UTF-8（无控制台会话，无法取代码页）",
-            _ => "文件重定向 → UTF-8",
+            WindowsConsoleWriter.FileTypeChar => Loc.T("console -> WriteConsoleW direct (codepage-independent)", "控制台 → WriteConsoleW 直写（与代码页无关）"),
+            WindowsConsoleWriter.FileTypePipe when cp != 0 => Loc.T($"pipe -> transcoded by console codepage {cp} (PowerShell decodes with [Console]::OutputEncoding)", $"管道 → 按控制台代码页 {cp} 转码（PowerShell 按 [Console]::OutputEncoding 解码）"),
+            WindowsConsoleWriter.FileTypePipe => Loc.T("pipe -> UTF-8 (no console session, codepage unavailable)", "管道 → UTF-8（无控制台会话，无法取代码页）"),
+            _ => Loc.T("file redirect -> UTF-8", "文件重定向 → UTF-8"),
         };
-        lines.Add($"输出通道 : {channel}");
+        lines.Add(Loc.T($"output channel : {channel}", $"输出通道 : {channel}"));
         return lines;
     }
 

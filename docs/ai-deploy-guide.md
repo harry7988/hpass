@@ -1,5 +1,7 @@
 # pwhide AI 部署与使用指南
 
+> English edition: [ai-deploy-guide.en.md](ai-deploy-guide.en.md)
+
 本文档面向 AI 编程工具（Claude Code、Cursor 及其他 Agent）。你的任务分两类：
 
 1. **部署**：按 §1 的 runbook 为用户安装、初始化并验证 pwhide；

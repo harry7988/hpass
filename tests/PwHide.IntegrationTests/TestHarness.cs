@@ -15,6 +15,8 @@ public sealed class CliFixture : IDisposable
         Environment.SetEnvironmentVariable("PWHIDE_HOME", null);
         // 测试环境禁用自动 sudo 提权（提权路径用 PWHIDE_NO_SUDO 短路；真实 sudo 流程由 CI 的 AOT 冒烟覆盖）
         Environment.SetEnvironmentVariable("PWHIDE_NO_SUDO", "1");
+        // 既有测试断言中文输出：固定 zh（产品默认 en，en 由 LanguageTests 专测）
+        Environment.SetEnvironmentVariable("PWHIDE_LANG", "zh");
         Environment.SetEnvironmentVariable("PWHIDE_PASSPHRASE", "init-pass-123");
         try
         {
@@ -65,6 +67,7 @@ public sealed class CliFixture : IDisposable
     public void Dispose()
     {
         Environment.SetEnvironmentVariable("PWHIDE_NO_SUDO", null);
+        Environment.SetEnvironmentVariable("PWHIDE_LANG", null);
         try { Directory.Delete(Home, recursive: true); } catch { }
     }
 }

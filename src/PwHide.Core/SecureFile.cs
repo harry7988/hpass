@@ -274,7 +274,7 @@ public static class SecureFile
         //    同 UID 替换木马会借"例行 sudo 提示"获得密码认证过的 root 执行，降级为手动指引
         if (!Console.IsInputRedirected && Hardening.IsTrustedBinaryPath(exe, requireRootOwner: true))
         {
-            Console.Error.WriteLine("pwhide: 即将请求 sudo 密码以安装 vault 变更（仅搬运密文，目标为上述 vault 文件）");
+            Console.Error.WriteLine(Loc.Tr("pwhide: 即将请求 sudo 密码以安装 vault 变更（仅搬运密文，目标为上述 vault 文件）"));
             var (code2, _, err2) = Hardening.RunCaptureEx(sudo, ["--", exe, .. args], timeoutMs: 300_000);
             if (code2 == 0) return;
             childErr ??= err2;

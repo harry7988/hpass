@@ -134,7 +134,7 @@ public static class Commands
 
         // 弱密文拦截：密码=常见语句时会与正常输出碰撞，且"被替换的位置"会直接暴露密码内容
         if (!forceWeak && WeakSecret.Check(password) is { } reason)
-            throw new UsageException($"拒绝保存弱密码：{reason}。如确要使用请追加 --force-weak（风险自担：输出中的常见文本会被大面积误替换为占位符，并可被据此推测）");
+            throw new UsageException(Loc.T($"refusing weak password: {Loc.Tr(reason)}. append --force-weak to override at your own risk (common texts in output would be massively mis-redacted and could be inferred)", $"拒绝保存弱密码：{reason}。如确要使用请追加 --force-weak（风险自担：输出中的常见文本会被大面积误替换为占位符，并可被据此推测）"));
 
         // 先取锁再读：Open 在锁前会读到陈旧快照，并发写覆盖会丢更新（last-writer-wins）
         using var _lock = Vault.FileLock.Acquire(ctx.Home);
@@ -178,7 +178,7 @@ public static class Commands
                 ctx.ErrText.WriteLine($"pwhide: 警告：字段 {fname} 形似敏感字段，命令行传值会进入 shell history——建议改用交互隐藏输入（pwhide set … -f {fname}）");
             // 加密字段值（如 host=127.0.0.1 这类常见值）不阻断，仅警告：密文注入可能与正常输出碰撞（明文字段无此问题）
             if (WeakSecret.Check(value) is { } fieldReason)
-                ctx.ErrText.WriteLine($"pwhide: 警告：字段 {fname} 的值{fieldReason}；作为密文注入时可能与正常输出碰撞，请确认");
+                ctx.ErrText.WriteLine(Loc.T($"pwhide: warning: value of field {fname}{Loc.Tr(fieldReason)}; when injected as a secret it may collide with normal output, please double-check", $"pwhide: 警告：字段 {fname} 的值{fieldReason}；作为密文注入时可能与正常输出碰撞，请确认"));
             vault.SetField(entry, fname, value);
         }
         vault.Save();
@@ -236,7 +236,7 @@ public static class Commands
             return ExitCodes.Ok;
         }
         if (metas.Count == 0) { ctx.OutText.WriteLine("（vault 为空，用 pwhide set <名> 录入）"); return ExitCodes.Ok; }
-        ctx.OutText.WriteLine($"{"名称",-16}{"类型",-10}{"账号",-14}{"租户",-10}字段");
+        ctx.OutText.WriteLine(Loc.T($"{"name",-16}{"type",-10}{"user",-14}{"tenant",-10}fields", $"{"名称",-16}{"类型",-10}{"账号",-14}{"租户",-10}字段"));
         foreach (var m in metas)
             ctx.OutText.WriteLine($"{m.Name,-16}{m.Type ?? "-",-10}{m.Username ?? "-",-14}{m.Tenant ?? "-",-10}{string.Join(",", m.Fields)}");
         return ExitCodes.Ok;
@@ -259,11 +259,11 @@ public static class Commands
             ctx.OutText.Write(JsonSerializer.Serialize(meta, PwHideJsonContext.Default.EntryMeta));
         else
         {
-            ctx.OutText.WriteLine($"名称: {meta.Name}");
-            ctx.OutText.WriteLine($"类型: {meta.Type ?? "-"}    账号: {meta.Username ?? "-"}    租户: {meta.Tenant ?? "-"}");
-            ctx.OutText.WriteLine($"密码: {(meta.HasPassword ? "已设置（只能经 {{" + meta.Name + "}} 注入）" : "未设置")}");
+            ctx.OutText.WriteLine(Loc.T($"name: {meta.Name}", $"名称: {meta.Name}"));
+            ctx.OutText.WriteLine(Loc.T($"type: {meta.Type ?? "-"}    user: {meta.Username ?? "-"}    tenant: {meta.Tenant ?? "-"}", $"类型: {meta.Type ?? "-"}    账号: {meta.Username ?? "-"}    租户: {meta.Tenant ?? "-"}"));
+            ctx.OutText.WriteLine(Loc.T($"password: {(meta.HasPassword ? $"set (injected only via {{{{{meta.Name}}}}})" : "(not set)")}", $"密码: {(meta.HasPassword ? "已设置（只能经 {{" + meta.Name + "}} 注入）" : "未设置")}"));
             if (meta.PlainFields.Count > 0)
-                ctx.OutText.WriteLine("明文字段（非敏感，元数据可见）: " + string.Join("  ", meta.PlainFields.Select(kv => $"{kv.Key}={kv.Value}")));
+                ctx.OutText.WriteLine(Loc.T("plain fields (non-sensitive, visible in metadata): ", "明文字段（非敏感，元数据可见）: ") + string.Join("  ", meta.PlainFields.Select(kv => $"{kv.Key}={kv.Value}")));
             ctx.OutText.WriteLine("可用占位符:");
             foreach (var p in meta.Placeholders) ctx.OutText.WriteLine($"  {p}");
         }
@@ -383,7 +383,7 @@ public static class Commands
                 return ExitCodes.Vault;
             }
             ctx.OutText.WriteLine("将以 sudo 重新执行加固（root 属主 + chattr +i）…");
-            Console.Error.WriteLine("pwhide: 即将请求 sudo 密码执行加固（目标为上述 vault 目录）");
+            Console.Error.WriteLine(Loc.Tr("pwhide: 即将请求 sudo 密码执行加固（目标为上述 vault 目录）"));
             var (code, _, _) = Hardening.RunCaptureEx(sudo, ["--", exe, "--home", ctx.Home, "harden"], timeoutMs: 300_000);
             return code == 0 ? ExitCodes.Ok : ExitCodes.Vault;
         }
@@ -608,6 +608,29 @@ public static class Commands
         using var vault = Vault.Open(ctx.Home);
         var entry = vault.Find(name) ?? throw new VaultException($"条目不存在：{name}");
         return VerifyDisplay(ctx, vault, entry);
+    }
+
+    /// <summary>
+    /// pwhide language en|zh：切换界面语言（默认英文）。写入 home/language；PWHIDE_LANG 环境变量优先。
+    /// 输出用 Loc.T 双语直出——切换立即生效（下一条命令即按新语言）。
+    /// </summary>
+    public static int LanguageCmd(CliContext ctx, string[] args)
+    {
+        var sub = args.Length == 0 ? "status" : args[0];
+        switch (sub)
+        {
+            case "en" or "zh":
+                Loc.Save(ctx.Home, sub);
+                ctx.OutText.WriteLine(Loc.T($"language set to {sub} (stored in {Path.Combine(ctx.Home, "language")}; applies to every command; PWHIDE_LANG env overrides)",
+                    $"语言已切换为 {sub}（已写入 {Path.Combine(ctx.Home, "language")}，对所有命令生效；PWHIDE_LANG 环境变量优先）"));
+                return ExitCodes.Ok;
+            case "status":
+                ctx.OutText.WriteLine(Loc.T($"language : {Loc.Lang} (source: {Loc.Source(ctx.Home)})",
+                    $"语言     : {Loc.Lang}（来源：{Loc.Source(ctx.Home)}）"));
+                return ExitCodes.Ok;
+            default:
+                throw new UsageException(Loc.T($"unknown language: {sub} (use en or zh)", $"未知的语言：{sub}（可用 en / zh）"));
+        }
     }
 
     /// <summary>

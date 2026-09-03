@@ -139,7 +139,7 @@ public static partial class ExecCommand
             var rawText = string.Join('\n', texts);
             if (EchoProbe.HasEchoPrimitive(rawText))
             {
-                var secretToken = refs.Where(r => NeedsSecret(vault, r)).Select(r => syntax.Render(r.Entry, r.Field)).FirstOrDefault() ?? syntax.Render("条目");
+                var secretToken = refs.Where(r => NeedsSecret(vault, r)).Select(r => syntax.Render(r.Entry, r.Field)).FirstOrDefault() ?? syntax.Render(Loc.T("entry", "条目"));
                 throw new UsageException(EchoProbe.DenyMessage(secretToken));
             }
         }

@@ -11,14 +11,24 @@ namespace PwHide.IntegrationTests;
 /// 这里锁定跨平台可验证的契约：覆盖链（env &gt; 文件 &gt; auto）、各模式的字节形态、
 /// doctor 全局指定、GBK 编码可用性（CodePages 提供程序）。
 /// </summary>
+[Collection("sequential")]
 public class ConsoleEncodingTests : IDisposable
 {
     private readonly string _home = Path.Combine(Path.GetTempPath(), "pwhide-enc-" + Guid.NewGuid().ToString("N"));
     private static bool Unix => OperatingSystem.IsLinux() || OperatingSystem.IsMacOS();
 
+    private readonly string? _prevLang;
+
+    public ConsoleEncodingTests()
+    {
+        _prevLang = Environment.GetEnvironmentVariable("PWHIDE_LANG");   // 断言中文输出；退出恢复（进程级 env，勿污染同集合）
+        Environment.SetEnvironmentVariable("PWHIDE_LANG", "zh");
+    }
+
     public void Dispose()
     {
         Environment.SetEnvironmentVariable(OutputChannel.EnvVar, null);
+        Environment.SetEnvironmentVariable("PWHIDE_LANG", _prevLang);
         try { Directory.Delete(_home, recursive: true); } catch { }
     }
 
