@@ -20,12 +20,17 @@ def exited(pid):
 def wrote_ok(b): return (b"saved" in b) or ("已保存".encode() in b)
 
 try:
-    subprocess.run(["dotnet", BIN, "--home", HOME, "init", "--no-harden"], input=b"x-pass-99\nx-pass-99\n",
+    cmd = ["dotnet", BIN] if BIN.endswith(".dll") else [BIN]
+    init_r = subprocess.run(cmd + ["--home", HOME, "init", "--no-harden"], input=b"x-pass-99\nx-pass-99\n",
                    capture_output=True, env={**os.environ, "PWHIDE_HOME": HOME, "PWHIDE_PASSPHRASE": "x-pass-99"})
+    if init_r.returncode != 0:
+        print("INIT FAILED:", init_r.returncode, init_r.stderr.decode(errors="replace")[:200])
+        sys.exit(1)
     pid, master = pty.fork()
     if pid == 0:
         env = {**os.environ, "PWHIDE_HOME": HOME, "PWHIDE_PASSPHRASE": "x-pass-99"}
-        os.execvpe("dotnet", ["dotnet", BIN, "--home", HOME, "set", "svc"], env)
+        # argv[0] 必须是程序路径；漏掉它会把 --home 当作 argv[0]（程序名）而丢失
+        os.execvpe(cmd[0], [cmd[0]] + cmd[1:] + ["--home", HOME, "set", "svc"], env)
         os._exit(127)
     out = b""
     deadline = time.time() + 25
@@ -57,6 +62,9 @@ try:
         else: break
     os.close(master)
     text = out.decode(errors="replace")
+    print("--- pty transcript ---")
+    for line in text.splitlines(): print("  |", line[:100])
+    print("--- end ---")
     leak = "my-secret-pw-77" in text
     saved = wrote_ok(out)
     stars = "*" in text
@@ -64,7 +72,7 @@ try:
     print("2. set 成功:", saved, "(应 True)")
     print("3. 星号回显:", stars, "(应 True)")
     ok = ok and (not leak) and saved and stars
-    r = subprocess.run(["dotnet", BIN, "--home", HOME, "exec", "--allow-echo", "--", "/bin/echo", "{{svc}}"],
+    r = subprocess.run(cmd + ["--home", HOME, "exec", "--allow-echo", "--", "/bin/echo", "{{svc}}"],
                        capture_output=True, env={**os.environ, "PWHIDE_HOME": HOME, "PWHIDE_PASSPHRASE": "x-pass-99"})  # exec 用主口令解锁，条目密码由 pwhide 注入
     usable = "{{svc}}" in r.stdout.decode()
     print("4. 条目密码真实可用:", usable, "(应 True)")
