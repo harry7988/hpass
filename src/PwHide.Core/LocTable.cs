@@ -233,8 +233,6 @@ public static partial class Loc
         "*pwhide exec [选项] -f <脚本>              脚本 stdin 模式（不落盘）||*pwhide exec [options] -f <script>         script-stdin mode (nothing written to disk)",
         "*pwhide rotate                             更换身份密钥对||*pwhide rotate                             rotate the identity key pair",
         "*pwhide verify <名>                        人工核验：解密显示密码/字段（需终端手输主口令）||*pwhide verify <name>                      human check: decrypted password/fields (terminal, typed passphrase)",
-        "*pwhide keychain set|clear|status          主口令存入系统钥匙串（配置后 exec 零交互）||*pwhide keychain set|clear|status          store the passphrase in the OS keychain (exec then needs none)",
-        "*pwhide language en|zh                      界面语言（默认英文；PWHIDE_LANG 可覆盖）||*pwhide language en|zh                      UI language (English default; PWHIDE_LANG overrides)",
         "*exec 选项：--shell auto|bash|sh|pwsh|cmd|none  --env 条目:环境变量(可重复)||*exec options: --shell auto|bash|sh|pwsh|cmd|none  --env entry:ENVVAR (repeatable)",
         "*--timeout 秒(默认120)  --allow-echo(放行回显探测拦截)  --home <目录>||*--timeout seconds (default 120)  --allow-echo (allow echo-probe)  --home <dir>",
         "*环境变量：PWHIDE_HOME / PWHIDE_PASSPHRASE / PWHIDE_PASSPHRASE_FILE / PWHIDE_OUTPUT_ENCODING / PWHIDE_NO_KEYCHAIN||*environment: PWHIDE_HOME / PWHIDE_PASSPHRASE / PWHIDE_PASSPHRASE_FILE / PWHIDE_OUTPUT_ENCODING / PWHIDE_NO_KEYCHAIN",
@@ -244,6 +242,8 @@ public static partial class Loc
         "明文字段（非敏感，元数据可见）: *||plain fields (non-sensitive, visible in metadata): *",
 "*每个命令都支持 -h / --help 查看详细用法（如 pwhide exec -h）；||*every command supports -h / --help for details (e.g. pwhide exec -h);",
 "*pwhide help <命令> 同效。||*pwhide help <command> is equivalent.",
+        "*pwhide language en|zh                     界面语言（默认英文；PWHIDE_LANG 可覆盖）||*UI language (English default; PWHIDE_LANG overrides)",
+        "*pwhide keychain set|clear|status          主口令存入系统钥匙串（配置后 exec 零交互）||*pwhide keychain set|clear|status          store the passphrase in the OS keychain (then exec needs no passphrase)",
         // ---------- language 命令（自身消息在 Commands 内用 Loc.T 双语直出） ----------
     ];
 

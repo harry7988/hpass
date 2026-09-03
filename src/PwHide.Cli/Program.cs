@@ -77,7 +77,7 @@ public static class CliRunner
                     ctx.OutText.WriteLine(CommandHelp.Get(hc));
                     return ExitCodes.Ok;
                 }
-                if (hc is "--help" or "-h") return Usage(ctx, "");
+                if (hc is "--help" or "-h") { Usage(ctx, ""); return ExitCodes.Ok; }
             }
 
             return cmd switch
@@ -97,7 +97,7 @@ public static class CliRunner
                 "keychain" => Commands.KeychainCmd(ctx, cmdArgs),
                 "language" => Commands.LanguageCmd(ctx, cmdArgs),
                 "version" or "--version" or "-v" => VersionCmd(ctx),
-                 "help" or "--help" or "-h" => Usage(ctx, ""),
+                 "help" or "--help" or "-h" => ShowUsage(ctx),
                 _ => Usage(ctx, $"未知命令：{cmd}"),
             };
         }
@@ -126,6 +126,12 @@ public static class CliRunner
         }
     }
 
+    private static int ShowUsage(CliContext ctx)
+    {
+        Usage(ctx, "");
+        return ExitCodes.Ok;
+    }
+
     private static int Usage(CliContext ctx, string msg)
     {
         if (msg.Length > 0) ctx.ErrText.WriteLine(msg);
@@ -143,7 +149,7 @@ public static class CliRunner
             pwhide rotate                             更换身份密钥对
             pwhide verify <名>                        人工核验：解密显示密码/字段（需终端手输主口令）
             pwhide keychain set|clear|status          主口令存入系统钥匙串（配置后 exec 零交互）
-            pwhide language en|zh                      界面语言（默认英文；PWHIDE_LANG 可覆盖）
+            pwhide language en|zh                     界面语言（默认英文；PWHIDE_LANG 可覆盖）
             pwhide harden / doctor / version
             pwhide doctor --output-encoding <auto|utf8|utf16|gbk|json>
                                                     全局手工指定输出编码（乱码兜底）

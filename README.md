@@ -5,7 +5,7 @@
 > A password proxy CLI for AI coding tools — the AI only ever sees placeholders and redacted output; passwords never enter the conversation context.
 
 [![CI](https://github.com/harry7988/pwhide/actions/workflows/ci.yml/badge.svg)](https://github.com/harry7988/pwhide/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/badge/release-0.7.0-blue)](https://github.com/harry7988/pwhide/releases)
+[![Release](https://img.shields.io/badge/release-0.8.0-blue)](https://github.com/harry7988/pwhide/releases)
 [![License: MIT](https://github.com/harry7988/pwhide/blob/main/LICENSE)](https://github.com/harry7988/pwhide/blob/main/LICENSE)
 
 You hand AI agents real commands to run — database connections, deploys, cloud CLIs — and the password has to come from somewhere. Pasting it into the chat leaks it into logs, history, and context windows. `pwhide` offers a third path: **credentials are stored in a local encrypted vault; the AI writes commands with placeholders; pwhide decrypts, injects, executes, and redacts the password back out of any output before the AI sees it.**
@@ -15,12 +15,13 @@ AI writes:  pwhide exec -- mysql -u {{db.user}} -p{{db}} -e "SELECT 1"
 AI receives: mysql: [output] ...  (any password in the output is replaced with {{db}})
 ```
 
-**Status: v0.7.0** — 269 tests passing (140 unit + 129 integration), CI on three platforms (macOS / Ubuntu / Windows) with a Native AOT smoke test (including a real-sudo hardening flow) all green. Threat model: [docs/threat-model.en.md](docs/threat-model.en.md); milestones: [PLAN.md](PLAN.md). UI language defaults to **English**; `pwhide language zh` switches to Chinese.
+**Status: v0.8.0** — 279 tests passing (140 unit + 139 integration), CI on three platforms (macOS / Ubuntu / Windows) with a Native AOT smoke test (including a real-sudo hardening flow) all green. Threat model: [docs/threat-model.en.md](docs/threat-model.en.md); milestones: [PLAN.md](PLAN.md). UI language defaults to **English**; `pwhide language zh` switches to Chinese.
 
 ## Highlights
 
 - **Zero context leakage**: no command can display a password (the single exception is the `--verify` human channel below); child-process output is streamed through a byte-accurate redactor before it returns.
 - **OS keychain, zero interaction**: `pwhide keychain set` stores the master passphrase in macOS Keychain / Windows Credential Manager / Linux Secret Service (validated against the vault before storing). Afterwards `exec` and friends never ask for it. `PWHIDE_NO_KEYCHAIN=1` bypasses.
+- **Per-command help**: every command takes `-h` / `--help` (bilingual, with examples and next-step guidance); `pwhide help <command>` is equivalent. `init`/`set` print next-step hints on success, and `doctor` reports language/keychain/output-channel diagnostics.
 - **Human verification channel**: `pwhide verify <name>` (peer of `exec`, equal to `inspect <name> --verify`) requires a real interactive terminal plus a hand-typed master passphrase — keychain/env are ignored — then decrypts and displays the entry for your eyes only. `exec --verify` shows the decrypted injection values and the full command, and asks for confirmation before running; declining means the child never starts.
 - **Switchable placeholder delimiters**: default `{{name}}`; `exec --ph '#'` switches to `#name#` (`--ph '@'` → `@name@`) so `{{ }}` stops colliding with Helm / Jinja / Go templates. Parsing and redaction semantics are identical.
 - **Plain fields**: `set` interactively asks per field whether to encrypt (sensitive-looking names default to encrypted; IPs/protocols default to plain). Plain-field values appear in `list --json` metadata so the AI can assemble commands without unlocking. `-pf name=value` opts in explicitly for scripts.
@@ -101,7 +102,7 @@ Download from [Releases](https://github.com/harry7988/pwhide/releases) (SHA256SU
 ## Development
 
 ```bash
-dotnet test          # 269 tests: unit (crypto/vault/placeholders/redaction/launcher/hardening/weak-secrets/probes) + integration (full CLI flows)
+dotnet test          # 279 tests: unit (crypto/vault/placeholders/redaction/launcher/hardening/weak-secrets/probes) + integration (full CLI flows)
 bash docker/run-linux-tests.sh   # full suite + real-root hardening scenarios in an isolated container
 ```
 

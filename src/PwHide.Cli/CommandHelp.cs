@@ -225,9 +225,9 @@ usage: pwhide exec [options] -- <command...>
 options:
   --shell auto|bash|sh|pwsh|cmd|none    shell to wrap with (default auto)
   --env <entry>:<ENVVAR>                inject the password as env var (repeatable)
-  -f <script>                           script-stdin mode (recommended; no argv/environ)
+  -f | --file <script>                  script-stdin mode (recommended; no argv/environ)
   --timeout <seconds>                   kill the process tree on timeout (default 120)
-  --ph <#|@>                            switch delimiters: #name# / @name@
+  --ph | --placeholder <#|@>            switch delimiters: #name# / @name@
   --allow-echo                          allow echo/printf co-occurring with secrets
   --verify                              pre-exec human check: interactive terminal,
                                         typed passphrase, decrypted preview, confirm y/N
@@ -257,9 +257,9 @@ examples:
 选项：
   --shell auto|bash|sh|pwsh|cmd|none    包装的 shell（默认 auto）
   --env <条目>:<环境变量>                将密码注入环境变量（可重复）
-  -f <脚本>                              脚本 stdin 模式（推荐；不进 argv/environ）
+  -f | --file <脚本>                      脚本 stdin 模式（推荐；不进 argv/environ）
   --timeout <秒>                         超时杀进程树（默认 120）
-  --ph <#|@>                             切换定界符：#名# / @名@
+  --ph | --placeholder <#|@>             切换定界符：#名# / @名@
   --allow-echo                           放行 echo/printf 与密文共现
   --verify                               执行前人工核对：需交互终端手输主口令，
                                          展示解密值并确认 y/N
@@ -407,6 +407,18 @@ notes:
   临时跳过：PWHIDE_NO_KEYCHAIN=1。槽位与 home 路径绑定。非交互配置：
   PWHIDE_PASSPHRASE=<主口令> pwhide keychain set
 """),
+
+        ["version"] = Loc.T(
+            """
+            show the pwhide version and platform.
+
+            usage: pwhide version
+            """,
+            """
+            显示 pwhide 版本与平台信息。
+
+            用法：pwhide version
+            """),
 
         ["language"] = Loc.T(
             """

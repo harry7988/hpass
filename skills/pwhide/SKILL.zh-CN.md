@@ -98,5 +98,3 @@ pwhide set <条目名> -t <类型:database|ssh|api|cloud|自定义> -u <账号> 
 3. 放入 PATH，`pwhide version` 验证；
 4. `pwhide init` —— 主口令由用户本人输入（基础模式 700/600）；随后建议执行 `pwhide harden` 启用管理员级写保护（sudo/UAC 属正常）；
 5. `pwhide doctor` 验证；引导用户录入首批凭据；如需人工验证脱敏：`pwhide exec --allow-echo -- echo {{条目名}}`（直接回显占位符会被拒绝）。
-
-> 注：

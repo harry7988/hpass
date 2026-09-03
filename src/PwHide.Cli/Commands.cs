@@ -33,6 +33,8 @@ public static class Commands
         if (!ctx.Interactive)
             throw new VaultException("非交互环境需要解锁：请设置 PWHIDE_PASSPHRASE / PWHIDE_PASSPHRASE_FILE，或先运行 pwhide keychain set 存入系统钥匙串");
 
+        if (Console.IsInputRedirected)
+            throw new UsageException("stdin 被重定向时无法进行交互口令输入：请设置 PWHIDE_PASSPHRASE / PWHIDE_PASSPHRASE_FILE，或先运行 pwhide keychain set");
         using var hidden = HiddenInput.Begin(ctx.In, ctx.Interactive);   // 先隐藏后提示：消除提示符与 stty 生效间的回显竞态
         ctx.ErrText.Write("主口令: ");
         var first = HiddenInput.ReadLine(hidden, ctx.In);
@@ -131,6 +133,8 @@ public static class Commands
             if (HiddenInput.ReadLine(hidden, ctx.In).Trim() != password)
                 throw new VaultException("两次输入不一致");
         }
+        else if (Console.IsInputRedirected)
+            throw new UsageException("检测到 stdin 被重定向但未指定 --password-stdin：请改用 pwhide set <名> --password-stdin < 密码文件（交互隐藏输入需要真实终端）");
         else throw new UsageException("非交互环境请使用 --password-stdin 从 stdin 提供密码（禁止命令行明文传密码）");
 
         if (password.Length == 0)
@@ -249,9 +253,15 @@ public static class Commands
             return ExitCodes.Ok;
         }
         if (metas.Count == 0) { ctx.OutText.WriteLine("（vault 为空，用 pwhide set <名> 录入）"); return ExitCodes.Ok; }
-        ctx.OutText.WriteLine(Loc.T($"{"name",-16}{"type",-10}{"user",-14}{"tenant",-10}fields", $"{"名称",-16}{"类型",-10}{"账号",-14}{"租户",-10}字段"));
+        ctx.OutText.WriteLine(Loc.T($"{"name",-16}{"type",-10}{"user",-14}{"tenant",-10}{"pw",-4}plain fields / encrypted fields", $"{"名称",-16}{"类型",-10}{"账号",-14}{"租户",-10}{"密码",-6}字段（明文/加密）"));
         foreach (var m in metas)
-            ctx.OutText.WriteLine($"{m.Name,-16}{m.Type ?? "-",-10}{m.Username ?? "-",-14}{m.Tenant ?? "-",-10}{string.Join(",", m.Fields)}");
+        {
+            var entry = vault.Data.Entries.First(e => e.Name == m.Name);
+            var plain = string.Join(",", entry.PlainFields.Select(kv => $"{kv.Key}={kv.Value}"));
+            var enc = string.Join(",", m.Fields);
+            var fieldsPart = plain.Length > 0 && enc.Length > 0 ? plain + " / " + enc : plain + enc;
+            ctx.OutText.WriteLine($"{m.Name,-16}{m.Type ?? "-",-10}{m.Username ?? "-",-14}{m.Tenant ?? "-",-10}{(m.HasPassword ? "✓" : "-"),-4}{fieldsPart}");
+        }
         return ExitCodes.Ok;
     }
 
@@ -327,6 +337,9 @@ public static class Commands
         vault.Rename(positional[0], positional[1]);
         vault.Save();
         ctx.OutText.WriteLine($"已重命名 {positional[0]} → {positional[1]}");
+        ctx.OutText.WriteLine(Loc.T($"placeholders are now {{{{{positional[1]}}}}} / {{{{{positional[1]}}}}}.field",
+            $"占位符现为 {{{{{positional[1]}}}}} / {{{{{positional[1]}}}}}.字段"));
+        ctx.OutText.WriteLine(Loc.T($"placeholders are now {{{{{positional[1]}}}}} / {{{{{positional[1]}}}}}.field", $"占位符现为 {{{{{positional[1]}}}}} / {{{{{positional[1]}}}}}.字段"));
         return ExitCodes.Ok;
     }
 
@@ -505,15 +518,15 @@ public static class Commands
         ctx.OutText.WriteLine($"platform : {System.Runtime.InteropServices.RuntimeInformation.OSDescription} {System.Runtime.InteropServices.RuntimeInformation.OSArchitecture}");
         foreach (var line in OutputChannel.Describe(ctx.Home))
             ctx.OutText.WriteLine(line);
-        ctx.OutText.WriteLine(Loc.T($"language  : {Loc.Lang} ({Loc.Source(ctx.Home)}; pwhide language en|zh)",
-            $"语言      : {Loc.Lang}（{Loc.Source(ctx.Home)}；pwhide language en|zh）"));
+        ctx.OutText.WriteLine(Loc.T($"language : {Loc.Lang} ({Loc.Source(ctx.Home)}; pwhide language en|zh)",
+            $"语言     : {Loc.Lang}（{Loc.Source(ctx.Home)}；pwhide language en|zh）"));
         if (Environment.GetEnvironmentVariable("PWHIDE_NO_KEYCHAIN") != "1" && Keychain.IsSupported)
         {
             var stored = Keychain.TryGet(ctx.Home, out _);
             ctx.OutText.WriteLine(Loc.T(stored
-                ? "keychain  : stored (zero-interaction)"
-                : "keychain  : not stored (pwhide keychain set enables zero-interaction)",
-                stored ? "钥匙串    : 已存主口令（零交互）" : "钥匙串    : 未存储（pwhide keychain set 可免交互）"));
+                ? "keychain : stored (zero-interaction)"
+                : "keychain : not stored (pwhide keychain set enables zero-interaction)",
+                stored ? "钥匙串   : 已存主口令（零交互）" : "钥匙串   : 未存储（pwhide keychain set 可免交互）"));
         }
         var ok = true;
 
